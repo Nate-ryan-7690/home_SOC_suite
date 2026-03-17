@@ -1,7 +1,11 @@
-# --- CONFIGURATION & AUTO-ARCHIVE ---
-$SOCPath = "$env:USERPROFILE\Desktop\SOC"
-$LogFile = "$SOCPath\Logs\Network_Watchdog_Log.txt"
-$ArchiveFolder = "$SOCPath\Logs\Archives"
+# ============================================================
+# USER CONFIGURATION
+# Set $RootPath to the folder where you installed the SOC Suite
+# Default is Desktop\SOC — change this if you installed elsewhere
+# ============================================================
+$RootPath = "$env:USERPROFILE\Desktop\SOC"
+$LogFile = "$RootPath\Logs\Network_Watchdog_Log.txt"
+$ArchiveFolder = "$RootPath\Logs\Archives"
 $MyIP = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -like "*Ethernet*" -or $_.InterfaceAlias -like "*Wi-Fi*" } | Select-Object -First 1).IPAddress
 $Network = (($MyIP -split "\.")[0..2] -join ".")
 $IPCache = @{}

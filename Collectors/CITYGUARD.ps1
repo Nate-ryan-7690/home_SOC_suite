@@ -7,10 +7,14 @@
 # --- ENCODING ---
 chcp 65001 | Out-Null
 
-# --- CONFIGURATION ---
-$SOCPath        = "$env:USERPROFILE\Desktop\SOC"
-$LogFile        = "$SOCPath\Logs\CityGuard_Log.txt"
-$ArchiveFolder  = "$SOCPath\Logs\Archives"
+# ============================================================
+# USER CONFIGURATION
+# Set $RootPath to the folder where you installed the SOC Suite
+# Default is Desktop\SOC — change this if you installed elsewhere
+# ============================================================
+$RootPath        = "$env:USERPROFILE\Desktop\SOC"
+$LogFile        = "$RootPath\Logs\CityGuard_Log.txt"
+$ArchiveFolder  = "$RootPath\Logs\Archives"
 $RefreshSeconds = 300
 
 # --- FUNCTIONS ---

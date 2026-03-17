@@ -4,9 +4,14 @@
 # Lord Commander shortcut
 # ============================================================
 
-$SOCPath = "$env:Userprofile\Desktop\SOC"
-$LogFile = "$SOCPath\Logs\Bulwark_Log.txt"
-$ReportFile = "$SOCPath\Reports\Crow_Report.txt"
+# ============================================================
+# USER CONFIGURATION
+# Set $RootPath to the folder where you installed the SOC Suite
+# Default is Desktop\SOC — change this if you installed elsewhere
+# ============================================================
+$RootPath = "$env:Userprofile\Desktop\SOC"
+$LogFile = "$RootPath\Logs\Bulwark_Log.txt"
+$ReportFile = "$RootPath\Reports\Crow_Report.txt"
 
 # --- START TRANSCRIPT ---
 Start-Transcript -Path $ReportFile -Force | Out-Null

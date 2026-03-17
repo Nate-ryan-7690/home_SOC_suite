@@ -4,9 +4,14 @@
 # Maester shortcut
 # ============================================================
 
-$SOCPath    = "$env:USERPROFILE\Desktop\SOC"
-$LogFile    = "$SOCPath\Logs\Steward_Log.txt"
-$ReportFile = "$SOCPath\Reports\Ledger_Report.txt"
+# ============================================================
+# USER CONFIGURATION
+# Set $RootPath to the folder where you installed the SOC Suite
+# Default is Desktop\SOC — change this if you installed elsewhere
+# ============================================================
+$RootPath    = "$env:USERPROFILE\Desktop\SOC"
+$LogFile    = "$RootPath\Logs\Steward_Log.txt"
+$ReportFile = "$RootPath\Reports\Ledger_Report.txt"
 
 # --- START TRANSCRIPT ---
 Start-Transcript -Path $ReportFile -Force | Out-Null
@@ -120,7 +125,7 @@ try {
             $Min    = [math]::Round(($_.Group.RAM | Measure-Object -Minimum).Minimum, 1)
             $Max    = [math]::Round(($_.Group.RAM | Measure-Object -Maximum).Maximum, 1)
             $Avg    = [math]::Round(($_.Group.RAM | Measure-Object -Average).Average, 1)
-            $Growth = $Max - $Min
+            
 
             # Trend detection - check if RAM values are consistently growing
             $Values  = $_.Group.RAM

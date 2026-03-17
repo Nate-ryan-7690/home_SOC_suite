@@ -1,7 +1,12 @@
 # --- INVESTIGATOR: THE CLEAN SUMMARY ---
-$SOCPath = "$env:USERPROFILE\Desktop\SOC"
-$LogFile = "$SOCPath\Logs\Network_Watchdog_Log.txt"
-$ReportFile = "$SOCPath\Reports\Weekly_Audit_Report.txt"
+# ============================================================
+# USER CONFIGURATION
+# Set $RootPath to the folder where you installed the SOC Suite
+# Default is Desktop\SOC — change this if you installed elsewhere
+# ============================================================
+$RootPath = "$env:USERPROFILE\Desktop\SOC"
+$LogFile = "$RootPath\Logs\Network_Watchdog_Log.txt"
+$ReportFile = "$RootPath\Reports\Weekly_Audit_Report.txt"
 
 # 1. Start a clean log of just the output
 Start-Transcript -Path $ReportFile -Force | Out-Null
