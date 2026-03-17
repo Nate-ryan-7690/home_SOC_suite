@@ -78,13 +78,32 @@ All logs follow a consistent format for future Python parsing:
 
 Logs are stored in a structured folder hierarchy:
 ```
-Desktop/SOC/
-├── Scripts/        — PowerShell collector and analyst scripts
-├── Logs/           — Active log files
-│   └── Archives/   — 7 day archived logs
-├── Reports/        — Weekly analyst reports
-└── Config/         — Baseline files (JSON)
+$RootPath/              — default: Desktop\SOC
+├── Scripts/            — PowerShell collector and analyst scripts
+├── Logs/               — Active log files
+│   └── Archives/       — 7 day archived logs
+├── Reports/            — Weekly analyst reports
+└── Config/             — Baseline files (JSON)
 ```
+
+---
+
+## Supported OS Languages
+
+Steward automatically detects the correct CPU performance counter path for the following OS languages:
+
+| Language | Counter Path |
+|----------|-------------|
+| English | \Process(*)\% Processor Time |
+| German | \Prozess(*)\Prozessorzeit (%) |
+| French | \Processus(*)\% temps processeur |
+| Spanish | \Proceso(*)\% de tiempo de procesador |
+| Italian | \Processo(*)\% Tempo processore |
+| Portuguese | \Processo(*)\% de Tempo do Processador |
+| Russian | \Процесс(*)\% загруженности процессора |
+| Chinese (Simp.) | \Process(*)\% Processor Time (typically English) |
+
+To add support for another language, add the localized counter path to the `$PathsToTry` array in the `Get-WorkingCounterPath` function in `Steward.ps1`.
 
 ---
 
@@ -100,8 +119,8 @@ Desktop/SOC/
   and future SIEM integration
 - **7 day log rotation** — automatic archiving keeps logs manageable while 
   preserving history
-- **German Windows compatibility** — performance counter paths localized for 
-  German Windows installations
+- **Multi-language Windows compatibility** — performance counter paths automatically 
+  detected at startup across 8 supported OS languages
 
 ---
 
@@ -117,11 +136,13 @@ Desktop/SOC/
 
 ## Notes
 
+- Set `$RootPath` in each script to the folder where you installed the SOC Suite. Default is `Desktop\SOC` — change this if you installed elsewhere
 - Scripts require PowerShell execution policy set to Bypass
 - Collector scripts require Administrator elevation for full system visibility
 - Analyst scripts run as standard user
-- Performance counter paths use German localization — adjust for other Windows 
-  language installations
+- Performance counter paths are automatically detected at startup across 8 supported 
+  OS languages. To add additional language support, add the localized counter path 
+  to the `$PathsToTry` array in `Get-WorkingCounterPath` in `Steward.ps1`
 - Geolocation provided by ip-api.com free tier
 
 ---
