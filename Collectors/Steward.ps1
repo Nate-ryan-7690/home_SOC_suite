@@ -96,7 +96,7 @@ function Get-TotalRAMGB {
     return [math]::Round($OS.TotalVisibleMemorySize / 1MB, 2)
 }
  
-function Format-Bar($Percent, $Width = 10) {
+function Draw-Bar($Percent, $Width = 10) {
     $Filled = [math]::Round(($Percent / 100) * $Width)
     $Empty  = $Width - $Filled
     return ("[$($BarFilled * $Filled)$($BarEmpty * $Empty)]")
@@ -258,6 +258,16 @@ while ($true) {
                 }
             }
             $TopCPU = $CPUResults | Sort-Object CPUPercent -Descending | Select-Object -First $TopProcesses
+            #Log All Processes above threshold regardless of top 5 display
+            $CPUResults | Where-Object { $_.CPUPercent -ge $CPUUnknown } | ForEach-Object {
+                $Severity = "OK"
+                if ($_.CPUPercent -ge $CPUCritical)      { $Severity = "CRITICAL" }
+                elseif ($_.CPUPercent -ge $CPUSuspicious) { $Severity = "SUSPICIOUS" }
+                elseif ($_.CPUPercent -ge $CPUUnknown)    { $Severity = "UNKNOWN" }
+                if ($Severity -ne "OK") {
+                    Write-Log $Severity "HIGH CPU: $($_.Name) at $($_.CPUPercent)% | RAM: $($_.RAM) MB"
+                }
+            }
         } catch {}
     }
  
