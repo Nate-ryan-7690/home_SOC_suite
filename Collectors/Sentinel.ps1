@@ -65,7 +65,7 @@ while($true) {
         $PPath = if ($Proc) { $Proc.Path } else { "System/Protected" }
         $Loc = $IPCache[$R_IP]
         $ID = "$PName-$R_IP"
-        if (-not $SeenConnections.ContainsKey($ID) -and $PName -ne "powershell") {
+        if (-not $SeenConnections.ContainsKey($ID)) {
             $LogEntry = "[$Now] NEW: $PName -> $R_IP ($Loc) | PATH: $PPath"
             $LogEntry | Out-File $LogFile -Append
             $SeenConnections[$ID] = $true
