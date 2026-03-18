@@ -10,6 +10,7 @@ $MyIP = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias
 $Network = (($MyIP -split "\.")[0..2] -join ".")
 $IPCache = @{}
 $SeenConnections = @{} 
+$SeenConnectionTimes = @{}
 
 # Check if we need to archive the old log (Log Rotation)
 if (Test-Path $LogFile) {
@@ -32,6 +33,14 @@ if (-not (Test-Path $LogFile)) {
 }
 
 while($true) {
+    # 1. EXPIRE OLD CACHE ENTRIES FIRST
+    $ExpiredKeys = $SeenConnections.Keys | Where-Object {
+        ((Get-Date) - $SeenConnectionTimes[$_]).TotalMinutes -gt 60
+    }
+    $ExpiredKeys | ForEach-Object {
+        $SeenConnections.Remove($_)
+        $SeenConnectionTimes.Remove($_)
+    }
     Clear-Host
     $Now = Get-Date -Format "HH:mm:ss"
     Write-Host "--- [TOTAL DEFENSE DASHBOARD | $Now] ---" -ForegroundColor Cyan
@@ -69,6 +78,7 @@ while($true) {
             $LogEntry = "[$Now] NEW: $PName -> $R_IP ($Loc) | PATH: $PPath"
             $LogEntry | Out-File $LogFile -Append
             $SeenConnections[$ID] = $true
+            $SeenConnectionTimes[$ID] = Get-Date
         }
 
         Write-Host "App: $($PName.PadRight(15)) | Loc: $($Loc.PadRight(18)) | Port: $($C.RemotePort)" -ForegroundColor White
