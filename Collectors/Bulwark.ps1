@@ -37,9 +37,9 @@ function Get-PortProcess($Port) {
     return @{ Name = "Unknown"; Path = "Unknown"; PID = "Unknown" }
 }
 
-function Write-Log($Severity, $Message) {
+function Write-Log($Severity, $Message, $Path) {
     $Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $Entry = "[$Timestamp] [$Severity] $Message"
+    $Entry = "[$Timestamp] [$Severity] $Message | Path: $Path"
     $Entry | Out-File $LogFile -Append
 }
 
@@ -169,25 +169,34 @@ while ($true) {
         $Loc = Get-GeoLocation $R_IP
         $Country = if ($Loc -match ",\s*(\w+)$") { $Matches[1] } else { "Unknown" }
 
-        # Determine severity
-        if ($Whitelist.ContainsKey($PName)) {
+        # --- UPDATED SEVERITY LOGIC (MAXIMUM VISIBILITY FOR BASELINING) ---
+        $Severity = "UNKNOWN" # Default starting point
+        $Message = ""
+
+        if ($Loc -eq "Lookup Failed") {
+            $Severity = "SUSPICIOUS"
+            $Message = "GEOLOCATION FAILED: $PName -> $R_IP (Check API Limit/Internet)"
+        }
+        elseif ($Whitelist.ContainsKey($PName)) {
             if ($Whitelist[$PName] -contains $Country) {
                 $Severity = "OK"
+                $Message = "WHITELIST MATCH: $PName -> $Country"
             } else {
                 $Severity = "CRITICAL"
-                $Message = "WHITELIST ANOMALY: $PName -> $Loc | Expected: $($Whitelist[$PName] -join ', ') | Path: $PPath"
-                Write-Log "CRITICAL" $Message
-            }
-        } else {
-            if ($Country -eq "Unknown") {
-                $Severity = "SUSPICIOUS"
-                $Message = "UNKNOWN PROCESS + UNKNOWN LOCATION: $PName -> $R_IP | Path: $PPath"
-                Write-Log "SUSPICIOUS" $Message
-            } else {
-                $Severity = "UNKNOWN"
+                $Message = "WHITELIST ANOMALY: $PName connected to $Country (Expected: $($Whitelist[$PName] -join ', '))"
             }
         }
-
+        else {
+            # This is your "Baseline Gold" - Unrecognized apps/locations
+            if ($Country -eq "Unknown") {
+                $Severity = "SUSPICIOUS"
+                $Message = "NEW PROCESS + UNKNOWN LOC: $PName -> $R_IP"
+            } else {
+                $Severity = "UNKNOWN"
+                $Message = "NEW PROCESS: $PName -> $Loc"
+            }
+        }
+        Write-Log $Severity $Message $PPath
         $Color = Get-SeverityColor $Severity
         Write-Host "[$Severity] App: $($PName.PadRight(15)) | Loc: $($Loc.PadRight(20)) | Port: $($C.RemotePort)" -ForegroundColor $Color
         Write-Host "Path: $PPath" -ForegroundColor DarkGray
