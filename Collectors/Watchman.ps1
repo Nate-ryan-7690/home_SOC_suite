@@ -94,7 +94,7 @@ try {
     # Log historical events not already in log
     $ExistingLog = if (Test-Path $LogFile) { Get-Content $LogFile -Encoding UTF8 } else { @() }
 
-    foreach ($LogEvent in $HistoricalEvents) {
+    foreach ($Event in $HistoricalEvents) {
         $Hour        = $Event.TimeCreated.Hour
         $Severity    = Get-EventSeverity $Event.Id $Hour
         $Description = Get-EventDescription $Event.Id
@@ -135,7 +135,7 @@ while ($true) {
             Sort-Object TimeCreated -Descending |
             Select-Object -First 10
 
-        foreach ($LogEvent in $RecentEvents) {
+        foreach ($Event in $RecentEvents) {
             $Hour        = $Event.TimeCreated.Hour
             $Severity    = Get-EventSeverity $Event.Id $Hour
             $Description = Get-EventDescription $Event.Id
