@@ -91,14 +91,19 @@ while($true) {
         }
 
         # --- START OF ANALYZER ---
-
+        $GeoFailure = ($Loc -eq "Unknown" -or $Loc -eq "Lookup Failed")
         $Severity = "UNKNOWN" 
-        # 1. Telemetry/Null Check (SUSPICIOUS)
-        if ([string]::IsNullOrWhiteSpace($PPath) -or $PPath -eq "System/Protected" -or $Loc -eq "Unknown" -or $Loc -eq "Lookup Failed") {
+        if ($GeoFailure) {
+            $Severity = "SUSPICIOUS"
+            # We set a flag here to trigger the extra log warning later
+            $LogWarning = "TELEMETRY_GAP: Geolocation failed for $PName ($R_IP)"
+        }
+        # 2. Telemetry/Null Check (SUSPICIOUS)
+        elseif ([string]::IsNullOrWhiteSpace($PPath) -or $PPath -eq "System/Protected" -or $Loc -eq "Unknown" -or $Loc -eq "Lookup Failed") {
             $Severity = "SUSPICIOUS"
         }
         else {
-            # 2. Trusted Zone Check
+            # 3. Trusted Zone Check
             $TrustedZones = @(
                 "C:\Windows",
                 "C:\Program Files",
@@ -113,7 +118,7 @@ while($true) {
                     break
                 }
             }
-            # 3. Environmental Violation (CRITICAL)
+            # 4. Environmental Violation (CRITICAL)
             if (-not $InZone) {
                 $Severity = "CRITICAL"
             }
@@ -121,7 +126,9 @@ while($true) {
         
         #Logs new connections olny with timestamp, Severity, App Name, Remote IP, Location, and Path. 
             if ($IsNewConnection) {
-            # Now that $Severity is calculated, we build and save the entry
+                if ($LogWarning) {
+                    "[$Now] [Warning] $LogWarning" | Out-File $LogFile -Append
+                }
             $LogEntry = "[$Now] [$Severity] NEW: $PName -> $R_IP ($Loc) | PATH: $PPath"
             $LogEntry | Out-File $LogFile -Append
         }
