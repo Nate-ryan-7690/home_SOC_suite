@@ -12,6 +12,16 @@ $IPCache = @{}
 $SeenConnections = @{} 
 $SeenConnectionTimes = @{}
 
+#Functions
+function Get-SeverityColor($Severity) {
+    switch ($Severity) {
+        "OK"         { return "Green" }
+        "UNKNOWN"    { return "Cyan" }
+        "SUSPICIOUS" { return "Yellow" }
+        "CRITICAL"   { return "Red" }
+        default      { return "Gray" }
+    }
+}
 # Check if we need to archive the old log (Log Rotation)
 if (Test-Path $LogFile) {
     $LogAge = (Get-Item $LogFile).CreationTime
@@ -50,7 +60,7 @@ while($true) {
     Get-NetNeighbor | Where-Object { $_.IPAddress -like "$Network*" -and $_.LinkLayerAddress -ne "00-00-00-00-00-00" } | ForEach-Object {
         $Color = "Gray"; $Status = $_.State
         if ($_.IPAddress -eq $MyIP) { $Color = "Blue"; $Status = "LOCAL HOST" }
-	elseif ($_.State -eq "Permanent") { $Color = "Magenta"; $Status = "GATEWAY/PERMANENT" }
+	    elseif ($_.State -eq "Permanent") { $Color = "Magenta"; $Status = "GATEWAY/PERMANENT" }
         elseif ($_.State -eq "Reachable") { $Color = "Green" }
         elseif ($_.State -eq "Stale") { $Color = "Yellow" }
         Write-Host "IP: $($_.IPAddress.PadRight(15)) | MAC: $($_.LinkLayerAddress) | $Status" -ForegroundColor $Color
@@ -68,24 +78,61 @@ while($true) {
                 $IPCache[$R_IP] = if ($G.status -eq "success") { "$($G.city), $($G.countryCode)" } else { "Unknown" }
             } catch { $IPCache[$R_IP] = "Lookup Failed" }
         }
-
         $Proc = Get-Process -Id $C.OwningProcess -ErrorAction SilentlyContinue
         $PName = if ($Proc) { $Proc.Name } else { "System/Unknown" }
         $PPath = if ($Proc) { $Proc.Path } else { "System/Protected" }
         $Loc = $IPCache[$R_IP]
-        $ID = "$PName-$R_IP"
+        $ID = "$PName-$PPath-$R_IP"
+        $IsNewConnection = $False
         if (-not $SeenConnections.ContainsKey($ID)) {
-            $LogEntry = "[$Now] NEW: $PName -> $R_IP ($Loc) | PATH: $PPath"
-            $LogEntry | Out-File $LogFile -Append
+            $IsNewConnection = $true
             $SeenConnections[$ID] = $true
             $SeenConnectionTimes[$ID] = Get-Date
         }
 
-        Write-Host "App: $($PName.PadRight(15)) | Loc: $($Loc.PadRight(18)) | Port: $($C.RemotePort)" -ForegroundColor White
-        Write-Host "Path: $PPath" -ForegroundColor DarkGray
-        Write-Host "------------------------------------------------------------" -ForegroundColor DarkGray
-    }
+        # --- START OF ANALYZER ---
 
+        $Severity = "UNKNOWN" 
+        # 1. Telemetry/Null Check (SUSPICIOUS)
+        if ([string]::IsNullOrWhiteSpace($PPath) -or $PPath -eq "System/Protected" -or $Loc -eq "Unknown" -or $Loc -eq "Lookup Failed") {
+            $Severity = "SUSPICIOUS"
+        }
+        else {
+            # 2. Trusted Zone Check
+            $TrustedZones = @(
+                "C:\Windows",
+                "C:\Program Files",
+                "C:\Program Files (x86)",
+                "$env:USERPROFILE\AppData\Local\Programs",
+                "C:\Windows\System32" # Redundant but safe
+            )
+            $InZone = $false
+            foreach ($Zone in $TrustedZones) {
+                if ($PPath -like "$Zone*") {
+                    $InZone = $true
+                    break
+                }
+            }
+            # 3. Environmental Violation (CRITICAL)
+            if (-not $InZone) {
+                $Severity = "CRITICAL"
+            }
+        }
+        
+        #Logs new connections olny with timestamp, Severity, App Name, Remote IP, Location, and Path. 
+            if ($IsNewConnection) {
+            # Now that $Severity is calculated, we build and save the entry
+            $LogEntry = "[$Now] [$Severity] NEW: $PName -> $R_IP ($Loc) | PATH: $PPath"
+            $LogEntry | Out-File $LogFile -Append
+        }
+        
+    # --- Dashboard Display ---
+    $TrafficColor = Get-SeverityColor -Severity $Severity
+    Write-Host "App: $($PName.PadRight(15)) | Loc: $($Loc.PadRight(18)) | Port: $($C.RemotePort)" -ForegroundColor $TrafficColor
+    Write-Host "Path: $PPath" -ForegroundColor DarkGray
+    Write-Host "------------------------------------------------------------" -ForegroundColor DarkGray
+    }
     Write-Host "`nAutomated Archiving Enabled (7 Day Cycle)."
     Start-Sleep -Seconds 5
+    
 }
