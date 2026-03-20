@@ -120,9 +120,9 @@ while ($true) {
         if (-not $BaselinePorts.ContainsKey($Port)) {
             $PName = $CurrentPorts[$Port].Name
             $PPath = $CurrentPorts[$Port].Path
-            $Message = "PORT OPENED: $Port | Process: $PName | Path: $PPath"
+            $Message = "PORT OPENED: $Port | Process: $PName"
             Write-Host "[PORT OPEN] $Message" -ForegroundColor Yellow
-            Write-Log "PORT OPEN" $Message
+            Write-Log "PORT OPEN" $Message $PPath
             # Add to baseline so it only logs once
             $BaselinePorts[$Port] = $CurrentPorts[$Port]
         }
@@ -132,9 +132,10 @@ while ($true) {
     foreach ($Port in @($BaselinePorts.Keys)) {
         if (-not $CurrentPorts.ContainsKey($Port)) {
             $PName = $BaselinePorts[$Port].Name
+            $PPath = $BaselinePorts[$Port].Path
             $Message = "PORT CLOSED: $Port | Process: $PName"
             Write-Host "[PORT CLOSE] $Message" -ForegroundColor DarkGray
-            Write-Log "PORT CLOSE" $Message
+            Write-Log "PORT CLOSE" $Message $PPath
             $BaselinePorts.Remove($Port)
         }
     }
