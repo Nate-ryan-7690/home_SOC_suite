@@ -11,8 +11,16 @@ $Network = (($MyIP -split "\.")[0..2] -join ".")
 $IPCache = @{}
 $SeenConnections = @{} 
 $SeenConnectionTimes = @{}
+$TransferTracker = @{}
+$TransferFile = "$RootPath\Config\Transfer_Baseline.json"
+$SampleCount = 0
 
-#Functions
+if (Test-Path $TransferFile) {
+    $TransferTracker = Get-Content $TransferFile | ConvertFrom-Json | ForEach-Object {
+        $h = @{}; $_.PSObject.Properties | ForEach-Object { $h[$_.Name] = $_.Value }; $h
+    }
+}
+
 function Get-SeverityColor($Severity) {
     switch ($Severity) {
         "OK"         { return "Green" }
@@ -43,6 +51,7 @@ if (-not (Test-Path $LogFile)) {
 }
 
 while($true) {
+    $SampleCount++
     # 1. EXPIRE OLD CACHE ENTRIES FIRST
     $ExpiredKeys = $SeenConnections.Keys | Where-Object {
         ((Get-Date) - $SeenConnectionTimes[$_]).TotalMinutes -gt 60
@@ -89,6 +98,14 @@ while($true) {
             $SeenConnections[$ID] = $true
             $SeenConnectionTimes[$ID] = Get-Date
         }
+        $PKey = $PName.ToLower()
+            if (-not $TransferTracker.ContainsKey($PKey)) { $TransferTracker[$PKey] = 0 }
+            $TransferTracker[$PKey]++
+
+            # Save every 10 cycles
+            if ($SampleCount % 10 -eq 0) {
+                $TransferTracker | ConvertTo-Json | Out-File $TransferFile -Encoding UTF8
+            }
 
         # --- START OF ANALYZER ---
         $GeoFailure = ($Loc -eq "Unknown" -or $Loc -eq "Lookup Failed")
