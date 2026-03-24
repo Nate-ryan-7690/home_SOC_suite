@@ -416,3 +416,13 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Night's Watch SOC — runtime-generated files
+Engine/hocsoc.db
+Engine/hocsoc.db-shm
+Engine/hocsoc.db-wal
+Logs/
+Reports/
+Config/Steward_Baseline.json
+Config/Transfer_Baseline.json
+Config/RegistryWarden_Baseline.json
