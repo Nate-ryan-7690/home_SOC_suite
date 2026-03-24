@@ -32,9 +32,9 @@ severity-tagged log entries. All require Administrator elevation.
 **Analysis Layer** — PowerShell analyst scripts that parse collected logs and
 generate weekly summary reports. Run as standard user.
 
-**Correlation Engine (Phase 7 — in progress)** — Python engine that ingests all
-collector logs, normalises events to a common schema, and runs 26 rule-based and
-risk-scored correlation rules across all data streams. Three programs:
+**Correlation Engine (Phase 7 — complete)** — Python engine that ingests all
+collector logs, normalises events to a common schema, and runs rule-based and
+risk-scored correlation across all data streams. Three programs:
 
 | Program | Role |
 |---|---|
@@ -133,6 +133,14 @@ Logs are stored in a structured folder hierarchy:
 ```
 $RootPath/              — default: Desktop\SOC
 ├── Scripts/            — PowerShell collector and analyst scripts
+├── Engine/             — Python correlation engine
+│   ├── engine.py       — Main loop and orchestration
+│   ├── log_parser.py   — Collector log ingestion
+│   ├── normalizer.py   — Event normalisation to canonical schema
+│   ├── correlator.py   — Correlation rules engine
+│   ├── alert_manager.py — Alert deduplication, flood detection, log writing
+│   ├── db.py           — SQLite operations (batch ingest, query, retention)
+│   └── config.py       — All thresholds and time windows in one place
 ├── Logs/               — Active log files
 │   └── Archives/       — 7-day archived logs
 ├── Reports/            — Weekly analyst reports
@@ -207,23 +215,32 @@ a red team analysis before the next layer was started.
 
 ---
 
-## Planned Next Phase — Python Correlation Engine
+## Current State — Phase 7 Complete
 
-The PowerShell collection layer is complete. Phase 7 builds the Python engine.
+The Python correlation engine is built and running live against all 11 collectors.
 
-**Implementation order:**
+**Engine pipeline:**
 
-1. `log_parser.py` — reads all collector logs into structured events
-2. `normalizer.py` — maps raw events to canonical normalised schema
-3. `correlator.py` — applies 26 rules, starting with Rules 6, 13, and 3
-4. `alert_manager.py` — deduplication, throttling, alert log
-5. `engine.py` — main loop, orchestration, 5–10 minute polling cycle
-6. `config.py` — all thresholds and time windows in one place (rotated
-   periodically — static thresholds are attackable)
+`log_parser.py` → `normalizer.py` → `correlator.py` → `alert_manager.py`
+
+All ingest, normalisation, and correlation steps use batch SQLite transactions.
+124 tests across three test suites — all passing.
+
+**Rules implemented:** 3, 4, 6, 8, 10, 11, 13, 14, 17, 18, 19, 21 (Tier 1 — single
+event triggers) and 2, 5, 9, 15, 20 (Tier 2 — windowed correlation across sources).
+Rules 7, 16, 22 pending Harbinger data. Rules 23, 24, 25 blocked pending
+specialised collectors.
 
 **Detection model:** Hybrid — deterministic rules for clear attack chains,
 risk scoring for cumulative weak signals, visibility alerts for collector
 silence and ingest quality degradation.
+
+**Next phases:**
+
+| Phase | Program | Status |
+|---|---|---|
+| 8 | The Dashboard — Flask + Chart.js live visibility | Planned |
+| 9 | The Steward — forensic archiving, integrity manifests, timeline reconstruction | Planned |
 
 ---
 
