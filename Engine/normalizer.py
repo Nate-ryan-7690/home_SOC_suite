@@ -58,10 +58,15 @@ SENTINEL_GAP_RE = re.compile(
 BULWARK_PORT_RE = re.compile(
     r'^PORT (OPENED|CLOSED): (\d+) \| Process: (.+?) \| Path: (.*)$'
 )
-# Geolocation (Section 2): CONFIRMED — verified against live Bulwark_Log.txt
-# NEW PROCESS: officeclicktorun -> Nairobi, KE | Path: C:\Program Files\...
-BULWARK_GEO_RE = re.compile(
-    r'^NEW PROCESS: (.+?) -> (.+?) \| Path: (.+)$'
+# Connection session tracking (CONFIRMED — matches Bulwark.ps1 Section 2 after session tracker rewrite)
+# CONNECTION_START: Process=chrome | Remote=142.250.185.78:443 | Location=Mountain View, US | Path: C:\...
+# CONNECTION_END:   Process=chrome | Remote=142.250.185.78:443 | Location=Mountain View, US | Cycles=570 | Duration=47m30s | Started=2026-03-25 21:00:00 | Path: C:\...
+# Remote field: greedy (.+) matches IP (including IPv6 colons); last :(\d+) captures port.
+BULWARK_CONN_START_RE = re.compile(
+    r'^CONNECTION_START: Process=(.+?) \| Remote=(.+):(\d+) \| Location=(.+?) \| Path: (.*)$'
+)
+BULWARK_CONN_END_RE = re.compile(
+    r'^CONNECTION_END: Process=(.+?) \| Remote=(.+):(\d+) \| Location=(.+?) \| Cycles=(\d+) \| Duration=(.+?) \| Started=(.+?) \| Path: (.*)$'
 )
 
 # --- Steward (CONFIRMED against Steward_Log.txt and Steward.ps1 source) ---
@@ -262,15 +267,25 @@ def _normalize_bulwark(message, severity):
             'process_path': process_path or None,
             'destination':  port,
         }
-    m = BULWARK_GEO_RE.match(message)
+    m = BULWARK_CONN_START_RE.match(message)
     if m:
-        actor, destination, process_path = m.groups()
+        actor, ip, _port, _location, process_path = m.groups()
         return {
             'event_type':   'NETWORK',
-            'subtype':      'GEO_ANOMALY',
+            'subtype':      'CONNECTION_START',
             'actor':        actor,
-            'process_path': process_path,
-            'destination':  destination,
+            'process_path': process_path or None,
+            'destination':  ip,
+        }
+    m = BULWARK_CONN_END_RE.match(message)
+    if m:
+        actor, ip, _port, _location, _cycles, _duration, _started, process_path = m.groups()
+        return {
+            'event_type':   'NETWORK',
+            'subtype':      'CONNECTION_END',
+            'actor':        actor,
+            'process_path': process_path or None,
+            'destination':  ip,
         }
     return None
 

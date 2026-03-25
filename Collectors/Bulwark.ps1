@@ -12,6 +12,7 @@ $RootPath = "$env:USERPROFILE\Desktop\SOC"
 $LogFile = "$RootPath\Logs\Bulwark_Log.txt"
 $ArchiveFolder = "$RootPath\Logs\Archives"
 $IPCache = @{}
+$ConnectionTracker = @{}
 
 # --- FUNCTIONS ---
 function Get-GeoLocation($IP) {
@@ -91,6 +92,37 @@ Get-NetTCPConnection -State Listen | ForEach-Object {
 "--- MONITORING STARTED: $(Get-Date) ---`n" | Out-File $LogFile -Append
 Write-Host "--- [BASELINE CAPTURED | MONITORING STARTED] ---`n" -ForegroundColor Cyan
 
+# --- SEED CONNECTION TRACKER ---
+# Pre-populate tracker from existing connections so the first poll
+# does not log every active connection as a new CONNECTION_START.
+Write-Host "--- [SEEDING CONNECTION TRACKER] ---" -ForegroundColor Cyan
+Get-NetTCPConnection -State Established | Where-Object {
+    $_.RemoteAddress -notlike "127.0.0.1" -and
+    $_.RemoteAddress -notlike "192.168.*" -and
+    $_.RemoteAddress -notlike "10.*"       -and
+    $_.RemoteAddress -notlike "0.0.0.0"   -and
+    $_.RemoteAddress -notlike "fe80::"    -and
+    $_.RemoteAddress -ne "::1"            -and
+    $_.RemoteAddress -notlike "fc00::*"   -and
+    $_.RemoteAddress -notlike "fd::"      -and
+    $_.RemoteAddress -ne "::"
+} | ForEach-Object {
+    $Proc  = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue
+    $PName = if ($Proc) { $Proc.Name.ToLower() } else { "unknown" }
+    $PPath = if ($Proc) { $Proc.Path } else { "System/Protected" }
+    $Key   = "$PName|$($_.RemoteAddress)|$($_.RemotePort)"
+    $Loc   = Get-GeoLocation $_.RemoteAddress
+    $ConnectionTracker[$Key] = @{
+        StartTime = Get-Date
+        Cycles    = 0
+        Loc       = $Loc
+        PPath     = $PPath
+        Severity  = "UNKNOWN"
+        Seeded    = $true
+    }
+}
+Write-Host "--- [TRACKER SEEDED: $($ConnectionTracker.Count) existing connections] ---`n" -ForegroundColor Cyan
+
 # --- WHITELIST ---
 # Add known process+country combinations here after your baseline month
 # Format: "ProcessName" = @("Country1", "Country2")
@@ -146,62 +178,72 @@ while ($true) {
         Write-Host "Port: $($Port.ToString().PadRight(6)) | Process: $PName" -ForegroundColor DarkGray
     }
 
-    # --- SECTION 2: GEOLOCATION ANOMALY DETECTION ---
-    Write-Host "`n--- [SECTION 2: CONNECTION ANOMALY MONITOR] ---" -ForegroundColor Cyan
+    # --- SECTION 2: CONNECTION SESSION TRACKER ---
+    Write-Host "`n--- [SECTION 2: CONNECTION SESSION TRACKER] ---" -ForegroundColor Cyan
 
+    $CurrentConns = @{}
     $Conns = Get-NetTCPConnection -State Established | Where-Object {
         $_.RemoteAddress -notlike "127.0.0.1" -and
         $_.RemoteAddress -notlike "192.168.*" -and
-        $_.RemoteAddress -notlike "10.*" -and
-        $_.RemoteAddress -notlike "0.0.0.0" -and
-	$_.RemoteAddress -notlike "fe80::" -and
-        $_.RemoteAddress -ne "::1" -and
-        $_.RemoteAddress -notlike "fc00::*" -and
-        $_.RemoteAddress -notlike "fd::" -and
-	$_.RemoteAddress -ne "::"
-	
+        $_.RemoteAddress -notlike "10.*"       -and
+        $_.RemoteAddress -notlike "0.0.0.0"   -and
+        $_.RemoteAddress -notlike "fe80::"    -and
+        $_.RemoteAddress -ne "::1"            -and
+        $_.RemoteAddress -notlike "fc00::*"   -and
+        $_.RemoteAddress -notlike "fd::"      -and
+        $_.RemoteAddress -ne "::"
     }
 
     foreach ($C in $Conns) {
-        $R_IP = $C.RemoteAddress
-        $Proc = Get-Process -Id $C.OwningProcess -ErrorAction SilentlyContinue
+        $R_IP  = $C.RemoteAddress
+        $Proc  = Get-Process -Id $C.OwningProcess -ErrorAction SilentlyContinue
         $PName = if ($Proc) { $Proc.Name.ToLower() } else { "unknown" }
         $PPath = if ($Proc) { $Proc.Path } else { "System/Protected" }
-        $Loc = Get-GeoLocation $R_IP
-        $Country = if ($Loc -match ",\s*(\w+)$") { $Matches[1] } else { "Unknown" }
+        $Key   = "$PName|$R_IP|$($C.RemotePort)"
+        $CurrentConns[$Key] = $true
 
-        # --- UPDATED SEVERITY LOGIC (MAXIMUM VISIBILITY FOR BASELINING) ---
-        $Severity = "UNKNOWN" # Default starting point
-        $Message = ""
-
-        if ($Loc -eq "Lookup Failed") {
-            $Severity = "SUSPICIOUS"
-            $Message = "GEOLOCATION FAILED: $PName -> $R_IP (Check API Limit/Internet)"
-        }
-        elseif ($Whitelist.ContainsKey($PName)) {
-            if ($Whitelist[$PName] -contains $Country) {
-                $Severity = "OK"
-                $Message = "WHITELIST MATCH: $PName -> $Country"
-            } else {
-                $Severity = "CRITICAL"
-                $Message = "WHITELIST ANOMALY: $PName connected to $Country (Expected: $($Whitelist[$PName] -join ', '))"
-            }
-        }
-        else {
-            # This is your "Baseline Gold" - Unrecognized apps/locations
-            if ($Country -eq "Unknown") {
+        if (-not $ConnectionTracker.ContainsKey($Key)) {
+            # NEW connection — geolocate once, assess severity, log CONNECTION_START
+            $Loc     = Get-GeoLocation $R_IP
+            $Country = if ($Loc -match ",\s*(\w+)$") { $Matches[1] } else { "Unknown" }
+            $Severity = "UNKNOWN"
+            if ($Loc -eq "Lookup Failed") {
                 $Severity = "SUSPICIOUS"
-                $Message = "NEW PROCESS + UNKNOWN LOC: $PName -> $R_IP"
-            } else {
-                $Severity = "UNKNOWN"
-                $Message = "NEW PROCESS: $PName -> $Loc"
+            } elseif ($Whitelist.ContainsKey($PName)) {
+                $Severity = if ($Whitelist[$PName] -contains $Country) { "OK" } else { "CRITICAL" }
             }
+            $Message = "CONNECTION_START: Process=$PName | Remote=$R_IP`:$($C.RemotePort) | Location=$Loc"
+            Write-Log $Severity $Message $PPath
+            Write-Host "[$Severity] NEW    Process=$($PName.PadRight(15)) | Remote=$R_IP`:$($C.RemotePort) | Location=$Loc" -ForegroundColor (Get-SeverityColor $Severity)
+            $ConnectionTracker[$Key] = @{
+                StartTime = Get-Date
+                Cycles    = 1
+                Loc       = $Loc
+                PPath     = $PPath
+                Severity  = $Severity
+                Seeded    = $false
+            }
+        } else {
+            # EXISTING connection — increment cycle counter, display only, no log write
+            $ConnectionTracker[$Key].Cycles++
+            $Info = $ConnectionTracker[$Key]
+            Write-Host "[$($Info.Severity)] ACTIVE Process=$($PName.PadRight(15)) | Remote=$R_IP`:$($C.RemotePort) | Location=$($Info.Loc) | Cycles=$($Info.Cycles)" -ForegroundColor (Get-SeverityColor $Info.Severity)
         }
-        Write-Log $Severity $Message $PPath
-        $Color = Get-SeverityColor $Severity
-        Write-Host "[$Severity] App: $($PName.PadRight(15)) | Loc: $($Loc.PadRight(20)) | Port: $($C.RemotePort)" -ForegroundColor $Color
-        Write-Host "Path: $PPath" -ForegroundColor DarkGray
-        Write-Host "------------------------------------------------------------" -ForegroundColor DarkGray
+    }
+
+    # Detect closed connections — log CONNECTION_END with full session data
+    foreach ($Key in @($ConnectionTracker.Keys)) {
+        if (-not $CurrentConns.ContainsKey($Key)) {
+            $Info    = $ConnectionTracker[$Key]
+            $Elapsed = [int]((Get-Date) - $Info.StartTime).TotalSeconds
+            $Parts   = $Key -split '\|'
+            $Message = "CONNECTION_END: Process=$($Parts[0]) | Remote=$($Parts[1]):$($Parts[2]) | Location=$($Info.Loc) | Cycles=$($Info.Cycles) | Duration=$([int]($Elapsed/60))m$($Elapsed%60)s | Started=$($Info.StartTime.ToString('yyyy-MM-dd HH:mm:ss'))"
+            if (-not $Info.Seeded) {
+                Write-Log "OK" $Message $Info.PPath
+            }
+            Write-Host "[OK] CLOSED Process=$($Parts[0]) | Remote=$($Parts[1]):$($Parts[2]) | Duration=$([int]($Elapsed/60))m$($Elapsed%60)s | Cycles=$($Info.Cycles)" -ForegroundColor DarkGray
+            $ConnectionTracker.Remove($Key)
+        }
     }
 
     Write-Host "`nNext scan in 5 seconds. Log: $LogFile"
