@@ -297,6 +297,17 @@ BRUTE_FORCE_IP_THRESHOLD   = 10
 BURST_CONNECTION_THRESHOLD = 3
 
 # ============================================================
+# C2 BEACON THRESHOLD — Rule 2
+# Minimum discrete Bulwark CONNECTION_END sessions from the
+# same (actor, destination) pair within OPERATIONAL_WINDOW
+# to constitute a beacon frequency signal.
+# Trusted-path processes require double this count before
+# alerting — routine update checks are frequent.
+# Rotate periodically.
+# ============================================================
+C2_BEACON_MIN_SESSIONS = 3
+
+# ============================================================
 # ENGINE HEALTH — Rule 18
 # COLLECTOR_SILENCE_THRESHOLD: seconds without a new event
 #   before a collector is considered silent and an alert fires.

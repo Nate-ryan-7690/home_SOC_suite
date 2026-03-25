@@ -1,4 +1,5 @@
 import os, sqlite3, hashlib
+from datetime import datetime
 import db, normalizer, correlator, config
 
 # Fresh database
@@ -57,10 +58,10 @@ alt = conn.execute("SELECT * FROM alerts WHERE rule_id=6").fetchall()
 conn.close()
 assert len(det) == 1, f'Expected 1 detection, got {len(det)}'
 assert len(alt) == 1, f'Expected 1 alert, got {len(alt)}'
-assert alt[0]['severity_current'] == 'CRITICAL'
+assert alt[0]['severity_current'] == 'SUSPICIOUS'   # TRUSTED path → SUSPICIOUS (not CRITICAL)
 assert '5.6.7.8' in alt[0]['explanation']
 assert 'LOLBin' in alt[0]['explanation']
-print('  detection created, alert=CRITICAL, explanation contains destination  PASS')
+print('  detection created, alert=SUSPICIOUS (trusted path), explanation contains destination  PASS')
 
 
 # -------------------------------------------------------
@@ -2567,5 +2568,122 @@ assert db.count_alerts() == 1, \
 print('  1 alert after 2 calls (INSERT OR IGNORE)  PASS')
 
 
+_r2_event_time = '2026-03-25 10:00:00'
+_r2_ref        = datetime(2026, 3, 25, 11, 0, 0)   # 1 hour after events — within OPERATIONAL_WINDOW
+
+
+# -------------------------------------------------------
+# Test 90: Rule 2 fires with >= C2_BEACON_MIN_SESSIONS CONNECTION_END sessions
+# -------------------------------------------------------
+print('Test 90: Rule 2 — beacon fires with 3 sessions...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+for i in range(3):
+    _insert_event(
+        event_id=f'r2_sess_{i}', event_type='NETWORK', subtype='CONNECTION_END',
+        actor='malware.exe', process_path=r'C:\Users\Public\malware.exe',
+        destination='10.10.10.10',
+        base_severity='SUSPICIOUS', trust_level='HIGH_RISK',
+        collector='bulwark', observed_at=_r2_event_time,
+    )
+
+correlator._rule_2(reference_time=_r2_ref)
+_conn90 = sqlite3.connect('hocsoc.db')
+_conn90.row_factory = sqlite3.Row
+_r2_alerts = _conn90.execute("SELECT * FROM alerts WHERE rule_id=2").fetchall()
+_conn90.close()
+assert len(_r2_alerts) == 1, f'Expected 1 alert, got {len(_r2_alerts)}'
+assert _r2_alerts[0]['severity_current'] == 'SUSPICIOUS'
+assert 'C2 Beacon' in _r2_alerts[0]['explanation']
+assert '10.10.10.10' in _r2_alerts[0]['explanation']
+print('  1 SUSPICIOUS alert, explanation contains destination  PASS')
+
+
+# -------------------------------------------------------
+# Test 91: Rule 2 no-fire below threshold (2 sessions < 3)
+# -------------------------------------------------------
+print('Test 91: Rule 2 — no alert below threshold...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+for i in range(2):
+    _insert_event(
+        event_id=f'r2_low_{i}', event_type='NETWORK', subtype='CONNECTION_END',
+        actor='malware.exe', process_path=r'C:\Users\Public\malware.exe',
+        destination='10.10.10.10',
+        base_severity='SUSPICIOUS', trust_level='HIGH_RISK',
+        collector='bulwark', observed_at=_r2_event_time,
+    )
+
+correlator._rule_2(reference_time=_r2_ref)
+assert db.count_alerts() == 0, f'Expected 0 alerts below threshold, got {db.count_alerts()}'
+print('  0 alerts with 2 sessions (below threshold of 3)  PASS')
+
+
+# -------------------------------------------------------
+# Test 92: Rule 2 Sentinel confirmation raises confidence
+# -------------------------------------------------------
+print('Test 92: Rule 2 — Sentinel confirmation boosts confidence...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+for i in range(3):
+    _insert_event(
+        event_id=f'r2_conf_{i}', event_type='NETWORK', subtype='CONNECTION_END',
+        actor='malware.exe', process_path=r'C:\Users\Public\malware.exe',
+        destination='10.10.10.10',
+        base_severity='SUSPICIOUS', trust_level='HIGH_RISK',
+        collector='bulwark', observed_at=_r2_event_time,
+    )
+
+# Sentinel confirms same destination
+_insert_event(
+    event_id='r2_sentinel', event_type='NETWORK', subtype='OUTBOUND',
+    actor='malware.exe', process_path=r'C:\Users\Public\malware.exe',
+    destination='10.10.10.10',
+    base_severity='SUSPICIOUS', trust_level='HIGH_RISK',
+    collector='sentinel', observed_at=_r2_event_time,
+)
+
+correlator._rule_2(reference_time=_r2_ref)
+_conn92 = sqlite3.connect('hocsoc.db')
+_conn92.row_factory = sqlite3.Row
+_r2_conf_alerts = _conn92.execute("SELECT confidence FROM alerts WHERE rule_id=2").fetchall()
+_conn92.close()
+assert len(_r2_conf_alerts) == 1
+_expected_conf = round(config.RULE_WEIGHTS[2], 10)
+assert round(_r2_conf_alerts[0]['confidence'], 10) == _expected_conf, \
+    f"Expected full weight {_expected_conf}, got {_r2_conf_alerts[0]['confidence']}"
+print(f'  Sentinel confirmed — confidence={_r2_conf_alerts[0]["confidence"]:.0%} (full weight)  PASS')
+
+
+# -------------------------------------------------------
+# Test 93: Rule 2 deduplication — same pair, two calls -> 1 alert
+# -------------------------------------------------------
+print('Test 93: Rule 2 deduplication...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+for i in range(3):
+    _insert_event(
+        event_id=f'r2_dup_{i}', event_type='NETWORK', subtype='CONNECTION_END',
+        actor='malware.exe', process_path=r'C:\Users\Public\malware.exe',
+        destination='10.10.10.10',
+        base_severity='SUSPICIOUS', trust_level='HIGH_RISK',
+        collector='bulwark', observed_at=_r2_event_time,
+    )
+
+correlator._rule_2(reference_time=_r2_ref)
+correlator._rule_2(reference_time=_r2_ref)
+assert db.count_alerts() == 1, \
+    f'Expected 1 alert after 2 calls, got {db.count_alerts()}'
+print('  1 alert after 2 calls (INSERT OR IGNORE)  PASS')
+
+
 print()
-print('correlator.py PASS - all 89 tests')
+print('correlator.py PASS - all 93 tests')

@@ -26,6 +26,7 @@
 
 import hashlib
 import os
+from collections import defaultdict
 from datetime import datetime, timedelta
 
 import config
@@ -929,6 +930,131 @@ def _rule_11(reference_time=None):
 # Append new rules here — run_all() picks them up automatically.
 # ============================================================
 
+def _rule_2(reference_time=None):
+    """Rule 2 — C2 Beacon Suspected  (HIGH → SUSPICIOUS)
+
+    The same process repeatedly connected to the same remote IP across
+    multiple discrete sessions within the operational window — a classic
+    beacon pattern where malware periodically checks in with a C2 server,
+    drops data or receives commands, then closes the connection.
+
+    Detection model:
+      Bulwark CONNECTION_END events are session records: each represents
+      a completed TCP session.  Seeing the same (actor, destination) pair
+      produce >= C2_BEACON_MIN_SESSIONS session records is a frequency
+      signal that warrants investigation.
+      Cross-confirmation from Sentinel (independent outbound monitor)
+      raises confidence.  Trusted-path processes require double the
+      threshold — routine update checks are frequent.
+
+    Alert deduplication:
+      Keyed on (rule_id, actor, destination, hour-bucket) so one alert
+      fires per suspicious pair per hour, not per cycle.
+
+    Severity: SUSPICIOUS (probabilistic — beacon patterns require triage,
+      not automatic CRITICAL escalation at this confidence level).
+
+    Note — future enhancement (see PHASE7_HANDOFF.md):
+      Store duration_seconds from CONNECTION_END in the events table.
+      Long-duration persistent sessions (single session open for hours)
+      are a separate TTP (persistent C2 channel vs. periodic beacon)
+      but belong in the same rule — add duration arm once schema supports it.
+
+    Sources: Bulwark (CONNECTION_END) + Sentinel (OUTBOUND confirmation)
+    Window:  OPERATIONAL_WINDOW (24 hours)
+    Weight:  config.RULE_WEIGHTS[2]
+    """
+    weight = config.RULE_WEIGHTS[2]
+
+    # --- Signal 1: Bulwark session records ---
+    bulwark_ends = db.get_events_in_window(
+        config.OPERATIONAL_WINDOW,
+        collector_name='bulwark',
+        event_type='NETWORK',
+        reference_time=reference_time,
+    )
+    session_ends = [e for e in bulwark_ends if e['subtype'] == 'CONNECTION_END']
+    if not session_ends:
+        return
+
+    # --- Group by (actor, destination) ---
+    sessions_by_pair = defaultdict(list)
+    for evt in session_ends:
+        key = (
+            (evt['actor'] or 'unknown').lower(),
+            evt['destination'] or 'unknown',
+        )
+        sessions_by_pair[key].append(evt)
+
+    # --- Signal 2: Sentinel outbound destinations (cross-source confirmation) ---
+    sentinel_events = db.get_events_in_window(
+        config.OPERATIONAL_WINDOW,
+        collector_name='sentinel',
+        event_type='NETWORK',
+        reference_time=reference_time,
+    )
+    sentinel_dests = {
+        e['destination'] for e in sentinel_events
+        if e['destination'] and e['subtype'] == 'OUTBOUND'
+    }
+
+    _now        = reference_time or datetime.now()
+    hour_bucket = _now.strftime('%Y-%m-%d-%H')
+
+    for (actor, dest), evts in sessions_by_pair.items():
+        trust     = evts[-1]['trust_level']
+        threshold = (
+            config.C2_BEACON_MIN_SESSIONS * 2
+            if trust == 'TRUSTED'
+            else config.C2_BEACON_MIN_SESSIONS
+        )
+        if len(evts) < threshold:
+            continue
+
+        sentinel_confirmed = dest in sentinel_dests
+        confidence         = weight if sentinel_confirmed else weight * 0.65
+
+        evidence = [e['event_id'] for e in evts[:10]]
+        alert_id = _make_alert_id(2, actor, dest, hour_bucket)
+
+        db.insert_detection({
+            'rule_id':          2,
+            'window_type':      'operational',
+            'matched_entities': evidence,
+            'score_factors': {
+                'actor':              actor,
+                'destination':        dest,
+                'session_count':      len(evts),
+                'sentinel_confirmed': sentinel_confirmed,
+                'trust_level':        trust,
+            },
+            'confidence':    confidence,
+            'evidence_refs': evidence,
+        })
+
+        db.insert_alert({
+            'alert_id':         alert_id,
+            'rule_id':          2,
+            'severity_current': 'SUSPICIOUS',
+            'confidence':       confidence,
+            'status':           'NEW',
+            'explanation': (
+                f"Rule 2 — C2 Beacon Suspected. "
+                f"Process '{actor}' completed {len(evts)} discrete TCP sessions "
+                f"to {dest} within the last "
+                f"{config.OPERATIONAL_WINDOW // 3600} hours — "
+                f"a frequency pattern consistent with periodic C2 check-in. "
+                f"Sentinel confirmation: "
+                f"{'YES' if sentinel_confirmed else 'NO (single-source)'}. "
+                f"Trust level: {trust}. "
+                f"Confidence: {confidence:.0%}. "
+                f"Evidence: {', '.join(evidence[:3])}"
+                f"{'...' if len(evidence) > 3 else ''}."
+            ),
+            'linked_case': None,
+        })
+
+
 def _rule_1(reference_time=None):
     """Rule 1 — Data Exfiltration Suspected  (SUSPICIOUS)
 
@@ -1618,7 +1744,7 @@ def _rule_17(reference_time=None):
 
 _TIER_1_RULES = [_rule_6, _rule_21, _rule_8, _rule_19, _rule_10]
 _TIER_2_RULES = [_rule_3, _rule_4, _rule_13, _rule_9, _rule_7, _rule_16,
-                 _rule_11, _rule_1, _rule_5, _rule_22, _rule_18, _rule_17]
+                 _rule_2, _rule_11, _rule_1, _rule_5, _rule_22, _rule_18, _rule_17]
 
 # _TIER_3_RULES = []   # Operational   — populated after baseline month
 # _TIER_4_RULES = []   # Campaign      — populated after baseline month

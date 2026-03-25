@@ -254,22 +254,23 @@ print('  path clean, CMD not included in process_path  PASS')
 
 
 # -------------------------------------------------------
-# Test 13: Bulwark — NEW PROCESS geolocation entry
+# Test 13: Bulwark — CONNECTION_START (session tracker format)
+# Old GEO_ANOMALY format removed — replaced by session tracking in Bulwark.ps1
 # -------------------------------------------------------
-print('Test 13: Bulwark NEW PROCESS geolocation normalization...')
+print('Test 13: Bulwark CONNECTION_START (session tracker) normalization...')
 raw13 = _insert_raw(
     'bulwark',
-    r'[2026-03-21 07:18:33] [UNKNOWN] NEW PROCESS: officeclicktorun -> Nairobi, KE | Path: C:\Program Files\Common Files\Microsoft Shared\ClickToRun\OfficeClickToRun.exe'
+    r'[2026-03-21 07:18:33] [UNKNOWN] CONNECTION_START: Process=officeclicktorun | Remote=52.96.153.146:443 | Location=Nairobi, KE | Path: C:\Program Files\Common Files\Microsoft Shared\ClickToRun\OfficeClickToRun.exe'
 )
 result13 = normalizer.normalize_raw_event(raw13)
-assert result13['event_type']        == 'NETWORK',                    f"event_type={result13['event_type']}"
-assert result13['subtype']           == 'GEO_ANOMALY',                f"subtype={result13['subtype']}"
-assert result13['actor']             == 'officeclicktorun',           f"actor={result13['actor']}"
-assert result13['destination']       == 'Nairobi, KE',                f"dest={result13['destination']}"
+assert result13['event_type']        == 'NETWORK',           f"event_type={result13['event_type']}"
+assert result13['subtype']           == 'CONNECTION_START',  f"subtype={result13['subtype']}"
+assert result13['actor']             == 'officeclicktorun',  f"actor={result13['actor']}"
+assert result13['destination']       == '52.96.153.146',     f"dest={result13['destination']}"
 assert result13['process_path']      == r'C:\Program Files\Common Files\Microsoft Shared\ClickToRun\OfficeClickToRun.exe', \
     f"path={result13['process_path']}"
-assert result13['parser_confidence'] == 1.0,                          f"confidence={result13['parser_confidence']}"
-print('  event_type=NETWORK, subtype=GEO_ANOMALY, actor/dest/path correct  PASS')
+assert result13['parser_confidence'] == 1.0,                 f"confidence={result13['parser_confidence']}"
+print('  CONNECTION_START -> event_type=NETWORK, actor/dest/path correct  PASS')
 
 
 
@@ -551,5 +552,73 @@ assert result28['parser_confidence'] == 1.0,                  f"confidence={resu
 print('  SERVICE_INSTALLED -> event_type=SYSTEM, CRITICAL  PASS')
 
 
+# -------------------------------------------------------
+# Test 29: Bulwark — CONNECTION_START (replaces old GEO_ANOMALY)
+# -------------------------------------------------------
+print('Test 29: Bulwark CONNECTION_START normalization...')
+raw29 = _insert_raw(
+    'bulwark',
+    r'[2026-03-25 21:00:00] [UNKNOWN] CONNECTION_START: Process=msedge | Remote=142.250.185.78:443 | Location=Mountain View, US | Path: C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+)
+result29 = normalizer.normalize_raw_event(raw29)
+assert result29['event_type']        == 'NETWORK',           f"event_type={result29['event_type']}"
+assert result29['subtype']           == 'CONNECTION_START',  f"subtype={result29['subtype']}"
+assert result29['actor']             == 'msedge',            f"actor={result29['actor']}"
+assert result29['destination']       == '142.250.185.78',    f"destination={result29['destination']}"
+assert result29['parser_confidence'] == 1.0,                 f"confidence={result29['parser_confidence']}"
+print('  CONNECTION_START -> event_type=NETWORK, actor=msedge, destination=IP  PASS')
+
+
+# -------------------------------------------------------
+# Test 30: Bulwark — CONNECTION_END with session metadata
+# -------------------------------------------------------
+print('Test 30: Bulwark CONNECTION_END normalization...')
+raw30 = _insert_raw(
+    'bulwark',
+    r'[2026-03-25 21:47:30] [OK] CONNECTION_END: Process=msedge | Remote=142.250.185.78:443 | Location=Mountain View, US | Cycles=570 | Duration=47m30s | Started=2026-03-25 21:00:00 | Path: C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+)
+result30 = normalizer.normalize_raw_event(raw30)
+assert result30['event_type']        == 'NETWORK',          f"event_type={result30['event_type']}"
+assert result30['subtype']           == 'CONNECTION_END',   f"subtype={result30['subtype']}"
+assert result30['actor']             == 'msedge',           f"actor={result30['actor']}"
+assert result30['destination']       == '142.250.185.78',   f"destination={result30['destination']}"
+assert result30['parser_confidence'] == 1.0,                f"confidence={result30['parser_confidence']}"
+print('  CONNECTION_END -> event_type=NETWORK, actor=msedge, destination=IP  PASS')
+
+
+# -------------------------------------------------------
+# Test 31: Bulwark — CONNECTION_START with IPv6 remote
+# -------------------------------------------------------
+print('Test 31: Bulwark CONNECTION_START IPv6 remote...')
+raw31 = _insert_raw(
+    'bulwark',
+    '[2026-03-25 21:00:00] [UNKNOWN] CONNECTION_START: Process=chrome | Remote=2001:4860:4860::8888:443 | Location=Mountain View, US | Path: C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
+)
+result31 = normalizer.normalize_raw_event(raw31)
+assert result31['event_type']        == 'NETWORK',          f"event_type={result31['event_type']}"
+assert result31['subtype']           == 'CONNECTION_START', f"subtype={result31['subtype']}"
+assert result31['actor']             == 'chrome',           f"actor={result31['actor']}"
+assert result31['destination']       == '2001:4860:4860::8888', f"destination={result31['destination']}"
+assert result31['parser_confidence'] == 1.0,                f"confidence={result31['parser_confidence']}"
+print('  CONNECTION_START IPv6 -> destination strips port correctly  PASS')
+
+
+# -------------------------------------------------------
+# Test 32: Bulwark — PORT_OPEN still works (unchanged format)
+# -------------------------------------------------------
+print('Test 32: Bulwark PORT_OPEN still normalizes correctly...')
+raw32 = _insert_raw(
+    'bulwark',
+    r'[2026-03-25 21:00:00] [PORT OPEN] PORT OPENED: 52518 | Process: Agent | Path: C:\Program Files\Agent\agent.exe'
+)
+result32 = normalizer.normalize_raw_event(raw32)
+assert result32['event_type']        == 'PORT',      f"event_type={result32['event_type']}"
+assert result32['subtype']           == 'PORT_OPEN', f"subtype={result32['subtype']}"
+assert result32['actor']             == 'Agent',     f"actor={result32['actor']}"
+assert result32['destination']       == '52518',     f"destination={result32['destination']}"
+assert result32['parser_confidence'] == 1.0,         f"confidence={result32['parser_confidence']}"
+print('  PORT_OPEN -> event_type=PORT, subtype=PORT_OPEN  PASS')
+
+
 print()
-print('normalizer.py PASS - all 28 tests')
+print('normalizer.py PASS - all 32 tests')
