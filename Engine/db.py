@@ -408,7 +408,7 @@ def insert_detection(detection: dict):
 # ============================================================
 
 def insert_alert(alert: dict):
-    now = datetime.now().isoformat()
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     with get_connection() as conn:
         conn.execute("""
             INSERT OR IGNORE INTO alerts
