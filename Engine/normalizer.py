@@ -140,6 +140,11 @@ DOH_CONN_RE = re.compile(
     r'^(DOH_CONN_NEW|DOH_CONN_AT_STARTUP): Process=(.+?) \| Path=(.+?) \| PID=\d+ \| Resolver=([\d\.:a-fA-F]+) \| LocalPort=\d+$'
 )
 
+# --- SysmonWatcher (CONFIRMED against SysmonWatcher.ps1 source) ---
+# SYSMON_EIDx_LABEL: key=val | key=val | ...
+# EID prefix maps to event_type; label suffix is used as subtype directly.
+SYSMONWATCHER_RE = re.compile(r'^(SYSMON_EID(\d+)_([A-Z0-9_]+)): (.+)$')
+
 # --- Warden (CONFIRMED against Warden.ps1 source) ---
 # FIM violations: INTEGRITY_VIOLATION, FILE_MISSING, WARDEN_SELF_INTEGRITY
 WARDEN_FIM_RE = re.compile(
@@ -442,6 +447,91 @@ def _normalize_doh_detector(message, severity):
     }
 
 
+def _sysmon_kv(detail, key):
+    """Extract value from 'key=val | key2=val2' style string. Returns None if absent."""
+    m = re.search(rf'{re.escape(key)}=([^|]+)', detail)
+    return m.group(1).strip() if m else None
+
+
+def _normalize_sysmonwatcher(message, severity):
+    # CONFIRMED — format matches SysmonWatcher.ps1 Write-Log calls.
+    m = SYSMONWATCHER_RE.match(message)
+    if not m:
+        return None
+    _label, eid_str, subtype_raw, detail = m.groups()
+    eid = int(eid_str)
+
+    _EID_TYPE = {
+        1: 'PROCESS',  5: 'PROCESS',  25: 'PROCESS',
+        6: 'DRIVER',
+        7: 'DLL',
+        8: 'INJECTION',
+        9: 'DISK',
+        10: 'PROCESS_ACCESS',
+        11: 'FILE',    15: 'FILE',
+        12: 'REGISTRY',
+        17: 'PIPE',    18: 'PIPE',
+        19: 'WMI',     20: 'WMI',     21: 'WMI',
+    }
+    event_type = _EID_TYPE.get(eid, 'UNKNOWN')
+    subtype    = subtype_raw
+
+    if eid in (1, 5, 25):
+        actor        = _sysmon_kv(detail, 'Process')
+        process_path = _sysmon_kv(detail, 'Path')
+        destination  = None
+    elif eid == 6:
+        actor        = _sysmon_kv(detail, 'Driver')
+        process_path = _sysmon_kv(detail, 'Path')
+        destination  = None
+    elif eid == 7:
+        actor        = _sysmon_kv(detail, 'Process')
+        # DLL_HIJACK/DLL_USERPATH: Path= is the DLL path (trust-level relevant).
+        # UNMANAGED_PWSH: ProcessPath= is the loading process path.
+        process_path = _sysmon_kv(detail, 'Path') or _sysmon_kv(detail, 'ProcessPath')
+        destination  = None
+    elif eid == 8:
+        actor        = _sysmon_kv(detail, 'Source')
+        process_path = None
+        destination  = _sysmon_kv(detail, 'Target')
+    elif eid == 9:
+        actor        = _sysmon_kv(detail, 'Process')
+        process_path = _sysmon_kv(detail, 'Path')
+        destination  = _sysmon_kv(detail, 'Device')
+    elif eid == 10:
+        actor        = _sysmon_kv(detail, 'Source')
+        process_path = _sysmon_kv(detail, 'SourcePath')
+        destination  = _sysmon_kv(detail, 'Target')
+    elif eid in (11, 15):
+        actor        = _sysmon_kv(detail, 'Process')
+        process_path = _sysmon_kv(detail, 'Path')
+        destination  = None
+    elif eid == 12:
+        actor        = _sysmon_kv(detail, 'Process')
+        process_path = None
+        destination  = _sysmon_kv(detail, 'Key')
+    elif eid in (17, 18):
+        actor        = _sysmon_kv(detail, 'Process')
+        process_path = _sysmon_kv(detail, 'Path')
+        destination  = _sysmon_kv(detail, 'PipeName')
+    elif eid in (19, 20, 21):
+        actor        = _sysmon_kv(detail, 'User')
+        process_path = None
+        destination  = None
+    else:
+        actor        = None
+        process_path = None
+        destination  = None
+
+    return {
+        'event_type':   event_type,
+        'subtype':      subtype,
+        'actor':        actor,
+        'process_path': process_path or None,
+        'destination':  destination or None,
+    }
+
+
 def _normalize_warden(message, severity):
     # CONFIRMED against Warden.ps1 source — four distinct message formats.
     m = WARDEN_FIM_RE.match(message)
@@ -497,6 +587,7 @@ _NORMALIZERS = {
     'bloodhound':      _normalize_bloodhound,
     'doh_detector':    _normalize_doh_detector,
     'warden':          _normalize_warden,
+    'sysmonwatcher':   _normalize_sysmonwatcher,
 }
 
 

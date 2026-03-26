@@ -2685,5 +2685,587 @@ assert db.count_alerts() == 1, \
 print('  1 alert after 2 calls (INSERT OR IGNORE)  PASS')
 
 
+
+
+# ============================================================
+# SYSMON RULES 28–39  (Tests 94–117)
+# ============================================================
+
+# -------------------------------------------------------
+# Test 94: Rule 28 — fires on BROWSER_DEBUGGER
+# -------------------------------------------------------
+print('Test 94: Rule 28 fires on PROCESS_ACCESS/BROWSER_DEBUGGER...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r28_fire', event_type='PROCESS_ACCESS', subtype='BROWSER_DEBUGGER',
+    actor='unknown_tool.exe', process_path=r'C:\Users\Public\unknown_tool.exe',
+    destination='chrome.exe',
+    base_severity='CRITICAL', trust_level='HIGH_RISK',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+_c94 = sqlite3.connect('hocsoc.db')
+_c94.row_factory = sqlite3.Row
+_d94 = _c94.execute("SELECT * FROM detections WHERE rule_id=28").fetchall()
+_a94 = _c94.execute("SELECT * FROM alerts WHERE rule_id=28").fetchall()
+_c94.close()
+assert len(_d94) == 1, f'Expected 1 detection, got {len(_d94)}'
+assert len(_a94) == 1, f'Expected 1 alert, got {len(_a94)}'
+assert _a94[0]['severity_current'] == 'CRITICAL'
+assert 'chrome.exe' in _a94[0]['explanation']
+print('  detection + CRITICAL alert, explanation contains target  PASS')
+
+
+# -------------------------------------------------------
+# Test 95: Rule 28 — no-fire on BROWSER_MONITOR (OK severity, different subtype)
+# -------------------------------------------------------
+print('Test 95: Rule 28 no-fire on BROWSER_MONITOR...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r28_nofire', event_type='PROCESS_ACCESS', subtype='BROWSER_MONITOR',
+    actor='svchost.exe', process_path=r'C:\Windows\System32\svchost.exe',
+    destination='chrome.exe',
+    base_severity='OK', trust_level='TRUSTED',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+assert db.count_alerts() == 0, f'Expected 0 alerts, got {db.count_alerts()}'
+print('  no alert for BROWSER_MONITOR (system monitoring, OK severity)  PASS')
+
+
+# -------------------------------------------------------
+# Test 96: Rule 29 — fires on HIGH_RISK_LAUNCH
+# -------------------------------------------------------
+print('Test 96: Rule 29 fires on PROCESS/HIGH_RISK_LAUNCH...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r29_fire', event_type='PROCESS', subtype='HIGH_RISK_LAUNCH',
+    actor='payload.exe', process_path=r'C:\Users\Schüler\Downloads\payload.exe',
+    destination=None,
+    base_severity='CRITICAL', trust_level='HIGH_RISK',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+_c96 = sqlite3.connect('hocsoc.db')
+_c96.row_factory = sqlite3.Row
+_a96 = _c96.execute("SELECT * FROM alerts WHERE rule_id=29").fetchall()
+_c96.close()
+assert len(_a96) == 1, f'Expected 1 alert, got {len(_a96)}'
+assert _a96[0]['severity_current'] == 'CRITICAL'
+assert 'Downloads' in _a96[0]['explanation']
+print('  CRITICAL alert, explanation contains path  PASS')
+
+
+# -------------------------------------------------------
+# Test 97: Rule 29 — no-fire on OK severity (whitelisted/baselined process)
+# -------------------------------------------------------
+print('Test 97: Rule 29 no-fire on PROCESS/HIGH_RISK_LAUNCH with OK severity...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r29_nofire', event_type='PROCESS', subtype='HIGH_RISK_LAUNCH',
+    actor='installer.exe', process_path=r'C:\Users\Schüler\Downloads\installer.exe',
+    destination=None,
+    base_severity='OK', trust_level='TRUSTED',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+assert db.count_alerts() == 0, f'Expected 0 alerts, got {db.count_alerts()}'
+print('  no alert for OK severity high-risk path  PASS')
+
+
+# -------------------------------------------------------
+# Test 98: Rule 30 — fires on AMSI_TAMPER
+# -------------------------------------------------------
+print('Test 98: Rule 30 fires on REGISTRY/AMSI_TAMPER...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r30_fire', event_type='REGISTRY', subtype='AMSI_TAMPER',
+    actor='malware.exe', process_path=r'C:\Users\Public\malware.exe',
+    destination=r'HKLM\SOFTWARE\Microsoft\AMSI\Providers\{GUID}',
+    base_severity='CRITICAL', trust_level='HIGH_RISK',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+_c98 = sqlite3.connect('hocsoc.db')
+_c98.row_factory = sqlite3.Row
+_a98 = _c98.execute("SELECT * FROM alerts WHERE rule_id=30").fetchall()
+_c98.close()
+assert len(_a98) == 1, f'Expected 1 alert, got {len(_a98)}'
+assert _a98[0]['severity_current'] == 'CRITICAL'
+assert 'AMSI' in _a98[0]['explanation']
+print('  CRITICAL alert, AMSI in explanation  PASS')
+
+
+# -------------------------------------------------------
+# Test 99: Rule 30 — no-fire on unrelated REGISTRY subtype
+# -------------------------------------------------------
+print('Test 99: Rule 30 no-fire on REGISTRY/KEY_MODIFIED...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r30_nofire', event_type='REGISTRY', subtype='KEY_MODIFIED',
+    actor='svchost.exe', process_path=r'C:\Windows\System32\svchost.exe',
+    destination=r'HKLM\SOFTWARE\SomeKey',
+    base_severity='SUSPICIOUS', trust_level='TRUSTED',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+assert db.count_alerts() == 0, f'Expected 0 alerts, got {db.count_alerts()}'
+print('  no alert for non-AMSI registry event  PASS')
+
+
+# -------------------------------------------------------
+# Test 100: Rule 31 — fires on DLL_HIJACK (CRITICAL)
+# -------------------------------------------------------
+print('Test 100: Rule 31 fires on DLL/DLL_HIJACK...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r31_hijack', event_type='DLL', subtype='DLL_HIJACK',
+    actor='victim.exe', process_path=r'C:\Users\Public\version.dll',
+    destination=None,
+    base_severity='CRITICAL', trust_level='HIGH_RISK',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+_c100 = sqlite3.connect('hocsoc.db')
+_c100.row_factory = sqlite3.Row
+_a100 = _c100.execute("SELECT * FROM alerts WHERE rule_id=31").fetchall()
+_c100.close()
+assert len(_a100) == 1, f'Expected 1 alert, got {len(_a100)}'
+assert _a100[0]['severity_current'] == 'CRITICAL'
+assert 'DLL_HIJACK' in _a100[0]['explanation']
+print('  CRITICAL alert for DLL_HIJACK  PASS')
+
+
+# -------------------------------------------------------
+# Test 101: Rule 31 — fires on DLL_USERPATH at SUSPICIOUS
+# -------------------------------------------------------
+print('Test 101: Rule 31 fires on DLL/DLL_USERPATH at SUSPICIOUS...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r31_userpath', event_type='DLL', subtype='DLL_USERPATH',
+    actor='someapp.exe', process_path=r'C:\Users\Schüler\AppData\Roaming\someapp\helper.dll',
+    destination=None,
+    base_severity='SUSPICIOUS', trust_level='UNKNOWN',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+_c101 = sqlite3.connect('hocsoc.db')
+_c101.row_factory = sqlite3.Row
+_a101 = _c101.execute("SELECT * FROM alerts WHERE rule_id=31").fetchall()
+_c101.close()
+assert len(_a101) == 1, f'Expected 1 alert, got {len(_a101)}'
+assert _a101[0]['severity_current'] == 'SUSPICIOUS'
+print('  SUSPICIOUS alert for DLL_USERPATH (severity passes through)  PASS')
+
+
+# -------------------------------------------------------
+# Test 102: Rule 32 — fires on WMI_BINDING (CRITICAL)
+# -------------------------------------------------------
+print('Test 102: Rule 32 fires on WMI/WMI_BINDING...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r32_binding', event_type='WMI', subtype='WMI_BINDING',
+    actor='NBDA0665\\Schüler', process_path=None,
+    destination=None,
+    base_severity='CRITICAL', trust_level='UNKNOWN',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+_c102 = sqlite3.connect('hocsoc.db')
+_c102.row_factory = sqlite3.Row
+_a102 = _c102.execute("SELECT * FROM alerts WHERE rule_id=32").fetchall()
+_c102.close()
+assert len(_a102) == 1, f'Expected 1 alert, got {len(_a102)}'
+assert _a102[0]['severity_current'] == 'CRITICAL'
+assert 'binding' in _a102[0]['explanation']
+print('  CRITICAL alert for WMI_BINDING, binding in explanation  PASS')
+
+
+# -------------------------------------------------------
+# Test 103: Rule 32 — no-fire on WMI event with OK severity
+# -------------------------------------------------------
+print('Test 103: Rule 32 no-fire on WMI/WMI_FILTER with OK severity...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r32_nofire', event_type='WMI', subtype='WMI_FILTER',
+    actor='SYSTEM', process_path=None,
+    destination=None,
+    base_severity='OK', trust_level='TRUSTED',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+assert db.count_alerts() == 0, f'Expected 0 alerts, got {db.count_alerts()}'
+print('  no alert for OK severity WMI event  PASS')
+
+
+# -------------------------------------------------------
+# Test 104: Rule 33 — fires on INJECTION/REMOTE_THREAD
+# -------------------------------------------------------
+print('Test 104: Rule 33 fires on INJECTION/REMOTE_THREAD...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r33_fire', event_type='INJECTION', subtype='REMOTE_THREAD',
+    actor='injector.exe', process_path=r'C:\Users\Public\injector.exe',
+    destination='svchost.exe',
+    base_severity='CRITICAL', trust_level='HIGH_RISK',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+_c104 = sqlite3.connect('hocsoc.db')
+_c104.row_factory = sqlite3.Row
+_a104 = _c104.execute("SELECT * FROM alerts WHERE rule_id=33").fetchall()
+_c104.close()
+assert len(_a104) == 1, f'Expected 1 alert, got {len(_a104)}'
+assert _a104[0]['severity_current'] == 'CRITICAL'
+assert 'svchost.exe' in _a104[0]['explanation']
+print('  CRITICAL alert, target in explanation  PASS')
+
+
+# -------------------------------------------------------
+# Test 105: Rule 33 — no-fire on wrong event_type
+# -------------------------------------------------------
+print('Test 105: Rule 33 no-fire on PROCESS/REMOTE_THREAD (wrong event_type)...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r33_nofire', event_type='PROCESS', subtype='REMOTE_THREAD',
+    actor='test.exe', process_path=r'C:\Windows\System32\test.exe',
+    destination=None,
+    base_severity='CRITICAL', trust_level='TRUSTED',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+assert db.count_alerts() == 0, f'Expected 0 alerts, got {db.count_alerts()}'
+print('  no alert for wrong event_type  PASS')
+
+
+# -------------------------------------------------------
+# Test 106: Rule 34 — fires on PROCESS_ACCESS/LSASS_ACCESS
+# -------------------------------------------------------
+print('Test 106: Rule 34 fires on PROCESS_ACCESS/LSASS_ACCESS...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r34_fire', event_type='PROCESS_ACCESS', subtype='LSASS_ACCESS',
+    actor='mimikatz.exe', process_path=r'C:\Users\Public\mimikatz.exe',
+    destination='lsass.exe',
+    base_severity='CRITICAL', trust_level='HIGH_RISK',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+_c106 = sqlite3.connect('hocsoc.db')
+_c106.row_factory = sqlite3.Row
+_a106 = _c106.execute("SELECT * FROM alerts WHERE rule_id=34").fetchall()
+_c106.close()
+assert len(_a106) == 1, f'Expected 1 alert, got {len(_a106)}'
+assert _a106[0]['severity_current'] == 'CRITICAL'
+assert 'lsass' in _a106[0]['explanation']
+print('  CRITICAL alert, lsass in explanation  PASS')
+
+
+# -------------------------------------------------------
+# Test 107: Rule 34 — no-fire on OK severity (whitelisted monitor)
+# -------------------------------------------------------
+print('Test 107: Rule 34 no-fire on LSASS_ACCESS with OK severity...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r34_nofire', event_type='PROCESS_ACCESS', subtype='LSASS_ACCESS',
+    actor='svchost.exe', process_path=r'C:\Windows\System32\svchost.exe',
+    destination='lsass.exe',
+    base_severity='OK', trust_level='TRUSTED',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+assert db.count_alerts() == 0, f'Expected 0 alerts, got {db.count_alerts()}'
+print('  no alert for OK severity LSASS access (whitelisted monitor)  PASS')
+
+
+# -------------------------------------------------------
+# Test 108: Rule 35 — fires on DISK/RAW_DISK_READ CRITICAL
+# -------------------------------------------------------
+print('Test 108: Rule 35 fires on DISK/RAW_DISK_READ (CRITICAL)...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r35_crit', event_type='DISK', subtype='RAW_DISK_READ',
+    actor='unknown.exe', process_path=r'C:\Users\Public\unknown.exe',
+    destination=r'\Device\HarddiskVolume3',
+    base_severity='CRITICAL', trust_level='HIGH_RISK',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+_c108 = sqlite3.connect('hocsoc.db')
+_c108.row_factory = sqlite3.Row
+_a108 = _c108.execute("SELECT * FROM alerts WHERE rule_id=35").fetchall()
+_c108.close()
+assert len(_a108) == 1, f'Expected 1 alert, got {len(_a108)}'
+assert _a108[0]['severity_current'] == 'CRITICAL'
+assert 'HarddiskVolume' in _a108[0]['explanation']
+print('  CRITICAL alert, device in explanation  PASS')
+
+
+# -------------------------------------------------------
+# Test 109: Rule 35 — SUSPICIOUS passes through
+# -------------------------------------------------------
+print('Test 109: Rule 35 SUSPICIOUS severity passes through...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r35_susp', event_type='DISK', subtype='RAW_DISK_READ',
+    actor='borderline.exe', process_path=r'C:\Program Files\borderline.exe',
+    destination=r'\Device\HarddiskVolume3',
+    base_severity='SUSPICIOUS', trust_level='UNKNOWN',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+_c109 = sqlite3.connect('hocsoc.db')
+_c109.row_factory = sqlite3.Row
+_a109 = _c109.execute("SELECT * FROM alerts WHERE rule_id=35").fetchall()
+_c109.close()
+assert len(_a109) == 1, f'Expected 1 alert, got {len(_a109)}'
+assert _a109[0]['severity_current'] == 'SUSPICIOUS'
+print('  SUSPICIOUS severity passes through correctly  PASS')
+
+
+# -------------------------------------------------------
+# Test 110: Rule 36 — fires on DRIVER/UNSIGNED_DRIVER
+# -------------------------------------------------------
+print('Test 110: Rule 36 fires on DRIVER/UNSIGNED_DRIVER...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r36_fire', event_type='DRIVER', subtype='UNSIGNED_DRIVER',
+    actor='rootkit.sys', process_path=r'C:\Users\Public\rootkit.sys',
+    destination=None,
+    base_severity='CRITICAL', trust_level='HIGH_RISK',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+_c110 = sqlite3.connect('hocsoc.db')
+_c110.row_factory = sqlite3.Row
+_a110 = _c110.execute("SELECT * FROM alerts WHERE rule_id=36").fetchall()
+_c110.close()
+assert len(_a110) == 1, f'Expected 1 alert, got {len(_a110)}'
+assert _a110[0]['severity_current'] == 'CRITICAL'
+assert 'rootkit.sys' in _a110[0]['explanation']
+print('  CRITICAL alert, driver name in explanation  PASS')
+
+
+# -------------------------------------------------------
+# Test 111: Rule 36 — no-fire on DRIVER with different subtype
+# -------------------------------------------------------
+print('Test 111: Rule 36 no-fire on DRIVER/SIGNED_DRIVER...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r36_nofire', event_type='DRIVER', subtype='SIGNED_DRIVER',
+    actor='legit.sys', process_path=r'C:\Windows\System32\drivers\legit.sys',
+    destination=None,
+    base_severity='OK', trust_level='TRUSTED',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+assert db.count_alerts() == 0, f'Expected 0 alerts, got {db.count_alerts()}'
+print('  no alert for signed driver  PASS')
+
+
+# -------------------------------------------------------
+# Test 112: Rule 37 — fires on PIPE/PIPE_CREATED (CRITICAL)
+# -------------------------------------------------------
+print('Test 112: Rule 37 fires on PIPE/PIPE_CREATED...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r37_created', event_type='PIPE', subtype='PIPE_CREATED',
+    actor='beacon.exe', process_path=r'C:\Users\Public\beacon.exe',
+    destination=r'\\.\pipe\MSSE-1234-server',
+    base_severity='CRITICAL', trust_level='HIGH_RISK',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+_c112 = sqlite3.connect('hocsoc.db')
+_c112.row_factory = sqlite3.Row
+_a112 = _c112.execute("SELECT * FROM alerts WHERE rule_id=37").fetchall()
+_c112.close()
+assert len(_a112) == 1, f'Expected 1 alert, got {len(_a112)}'
+assert _a112[0]['severity_current'] == 'CRITICAL'
+assert 'created' in _a112[0]['explanation']
+print('  CRITICAL alert, pipe action in explanation  PASS')
+
+
+# -------------------------------------------------------
+# Test 113: Rule 37 — SUSPICIOUS passes through on PIPE_CONNECTED
+# -------------------------------------------------------
+print('Test 113: Rule 37 SUSPICIOUS passes through on PIPE_CONNECTED...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r37_connected', event_type='PIPE', subtype='PIPE_CONNECTED',
+    actor='implant.exe', process_path=r'C:\Users\Public\implant.exe',
+    destination=r'\\.\pipe\meterpreter',
+    base_severity='SUSPICIOUS', trust_level='HIGH_RISK',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+_c113 = sqlite3.connect('hocsoc.db')
+_c113.row_factory = sqlite3.Row
+_a113 = _c113.execute("SELECT * FROM alerts WHERE rule_id=37").fetchall()
+_c113.close()
+assert len(_a113) == 1, f'Expected 1 alert, got {len(_a113)}'
+assert _a113[0]['severity_current'] == 'SUSPICIOUS'
+assert 'connected to' in _a113[0]['explanation']
+print('  SUSPICIOUS alert, connected to in explanation  PASS')
+
+
+# -------------------------------------------------------
+# Test 114: Rule 38 — fires on FILE/EXECUTABLE_CREATED (CRITICAL)
+# -------------------------------------------------------
+print('Test 114: Rule 38 fires on FILE/EXECUTABLE_CREATED...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r38_exec', event_type='FILE', subtype='EXECUTABLE_CREATED',
+    actor='chrome.exe', process_path=r'C:\Users\Schüler\Downloads\evil.exe',
+    destination=None,
+    base_severity='CRITICAL', trust_level='HIGH_RISK',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+_c114 = sqlite3.connect('hocsoc.db')
+_c114.row_factory = sqlite3.Row
+_a114 = _c114.execute("SELECT * FROM alerts WHERE rule_id=38").fetchall()
+_c114.close()
+assert len(_a114) == 1, f'Expected 1 alert, got {len(_a114)}'
+assert _a114[0]['severity_current'] == 'CRITICAL'
+assert 'EXECUTABLE_CREATED' in _a114[0]['explanation']
+print('  CRITICAL alert for dropped executable  PASS')
+
+
+# -------------------------------------------------------
+# Test 115: Rule 38 — SUSPICIOUS for ZONE_IDENTIFIER
+# -------------------------------------------------------
+print('Test 115: Rule 38 fires on FILE/ZONE_IDENTIFIER (SUSPICIOUS)...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r38_zone', event_type='FILE', subtype='ZONE_IDENTIFIER',
+    actor='browser.exe', process_path=r'C:\Users\Schüler\Downloads\setup.exe',
+    destination=None,
+    base_severity='SUSPICIOUS', trust_level='UNKNOWN',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+_c115 = sqlite3.connect('hocsoc.db')
+_c115.row_factory = sqlite3.Row
+_a115 = _c115.execute("SELECT * FROM alerts WHERE rule_id=38").fetchall()
+_c115.close()
+assert len(_a115) == 1, f'Expected 1 alert, got {len(_a115)}'
+assert _a115[0]['severity_current'] == 'SUSPICIOUS'
+assert 'Zone.Identifier' in _a115[0]['explanation']
+print('  SUSPICIOUS alert, Zone.Identifier in explanation  PASS')
+
+
+# -------------------------------------------------------
+# Test 116: Rule 39 — fires on PROCESS/PROCESS_TAMPER
+# -------------------------------------------------------
+print('Test 116: Rule 39 fires on PROCESS/PROCESS_TAMPER...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r39_fire', event_type='PROCESS', subtype='PROCESS_TAMPER',
+    actor='svchost.exe', process_path=r'C:\Windows\System32\svchost.exe',
+    destination=None,
+    base_severity='CRITICAL', trust_level='TRUSTED',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+_c116 = sqlite3.connect('hocsoc.db')
+_c116.row_factory = sqlite3.Row
+_a116 = _c116.execute("SELECT * FROM alerts WHERE rule_id=39").fetchall()
+_c116.close()
+assert len(_a116) == 1, f'Expected 1 alert, got {len(_a116)}'
+assert _a116[0]['severity_current'] == 'CRITICAL'
+assert 'hollowing' in _a116[0]['explanation']
+print('  CRITICAL alert, hollowing in explanation  PASS')
+
+
+# -------------------------------------------------------
+# Test 117: Rule 39 — no-fire on PROCESS/PROCESS_TERMINATED (wrong subtype)
+# -------------------------------------------------------
+print('Test 117: Rule 39 no-fire on PROCESS/PROCESS_TERMINATED...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+_insert_event(
+    event_id='r39_nofire', event_type='PROCESS', subtype='PROCESS_TERMINATED',
+    actor='notepad.exe', process_path=r'C:\Windows\System32\notepad.exe',
+    destination=None,
+    base_severity='OK', trust_level='TRUSTED',
+    collector='sysmonwatcher',
+)
+correlator.run_all()
+assert db.count_alerts() == 0, f'Expected 0 alerts, got {db.count_alerts()}'
+print('  no alert for PROCESS_TERMINATED (wrong subtype)  PASS')
+
+
 print()
-print('correlator.py PASS - all 93 tests')
+print('correlator.py PASS - all 117 tests')

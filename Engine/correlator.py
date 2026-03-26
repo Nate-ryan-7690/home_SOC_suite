@@ -1742,7 +1742,526 @@ def _rule_17(reference_time=None):
     })
 
 
-_TIER_1_RULES = [_rule_6, _rule_21, _rule_8, _rule_19, _rule_10]
+# ============================================================
+# SYSMON RULES (Phase 7A) — Rules 28–39
+# All single-event / Tier 1.
+# Source: SysmonWatcher (Microsoft-Windows-Sysmon/Operational)
+# ============================================================
+
+def _rule_28(event):
+    """Rule 28 — Browser Debugger Attachment  (CRITICAL)
+    An unknown process opened a handle to a browser process with write/inject
+    capability (PROCESS_VM_WRITE | PROCESS_CREATE_THREAD | PROCESS_VM_OPERATION).
+    Legitimate software never debugs production browsers — this pattern is
+    characteristic of credential-harvesting tools that hook browser memory to
+    extract session tokens, saved passwords, and form data.
+    Source: SysmonWatcher (event_type=PROCESS_ACCESS, subtype=BROWSER_DEBUGGER)
+    """
+    if event['event_type'] != 'PROCESS_ACCESS':
+        return
+    if event['subtype'] != 'BROWSER_DEBUGGER':
+        return
+    weight   = config.RULE_WEIGHTS[28]
+    alert_id = _make_alert_id(28, event['event_id'])
+    db.insert_detection({
+        'rule_id': 28, 'window_type': 'single',
+        'matched_entities': [event['event_id']],
+        'score_factors': {
+            'source': event['actor'], 'target': event['destination'],
+            'source_path': event['process_path'], 'base_severity': event['base_severity'],
+        },
+        'confidence': weight, 'evidence_refs': [event['event_id']],
+    })
+    db.insert_alert({
+        'alert_id': alert_id, 'rule_id': 28,
+        'severity_current': 'CRITICAL', 'confidence': weight, 'status': 'NEW',
+        'explanation': (
+            f"[Rule 28] Browser Debugger Attachment. "
+            f"Process '{event['actor'] or 'unknown'}' opened a handle to "
+            f"'{event['destination'] or 'browser process'}' with write/inject capability. "
+            f"Legitimate software never debugs production browsers. This is characteristic of "
+            f"credential-harvesting tools that read browser memory for session tokens and passwords. "
+            f"Source path: {event['process_path'] or 'not recorded'}. "
+            f"Confidence: {weight:.0%}. Evidence: {event['event_id']}."
+        ),
+        'linked_case': None,
+    })
+
+
+def _rule_29(event):
+    """Rule 29 — High-Risk Path Launch  (CRITICAL → SUSPICIOUS)
+    A process launched from a staging path (Downloads, Temp, AppData\\Roaming,
+    Public, ProgramData, Windows\\Temp) or used encoded/obfuscated command-line
+    arguments. These are primary initial-access and persistence indicators.
+    TrustedHighRiskProcesses (Defender, Claude Code) are downgraded to SUSPICIOUS
+    at the collector level — severity passed through here.
+    Source: SysmonWatcher (event_type=PROCESS, subtype=HIGH_RISK_LAUNCH|ENCODED_CMDLINE)
+    """
+    if event['event_type'] != 'PROCESS':
+        return
+    if event['subtype'] not in ('HIGH_RISK_LAUNCH', 'ENCODED_CMDLINE'):
+        return
+    if event['base_severity'] not in ('CRITICAL', 'SUSPICIOUS'):
+        return
+    weight   = config.RULE_WEIGHTS[29]
+    severity = event['base_severity']
+    alert_id = _make_alert_id(29, event['event_id'])
+    db.insert_detection({
+        'rule_id': 29, 'window_type': 'single',
+        'matched_entities': [event['event_id']],
+        'score_factors': {
+            'subtype': event['subtype'], 'actor': event['actor'],
+            'process_path': event['process_path'], 'base_severity': severity,
+        },
+        'confidence': weight, 'evidence_refs': [event['event_id']],
+    })
+    db.insert_alert({
+        'alert_id': alert_id, 'rule_id': 29,
+        'severity_current': severity, 'confidence': weight, 'status': 'NEW',
+        'explanation': (
+            f"[Rule 29] High-Risk Path Launch. "
+            f"Process '{event['actor'] or 'unknown'}' launched from a staging path "
+            f"({event['process_path'] or 'path not recorded'}). "
+            f"{'Encoded or obfuscated command-line arguments detected. ' if event['subtype'] == 'ENCODED_CMDLINE' else ''}"
+            f"High-risk paths (Downloads, Temp, AppData\\Roaming, Public, ProgramData) "
+            f"are primary attacker staging areas. Cross-reference with Rule 38 (downloaded file) "
+            f"and Rule 13 (initial access) for the same actor. "
+            f"Confidence: {weight:.0%}. Evidence: {event['event_id']}."
+        ),
+        'linked_case': None,
+    })
+
+
+def _rule_30(event):
+    """Rule 30 — AMSI Provider Tampered  (CRITICAL)
+    A registry key controlling AMSI (Anti-Malware Scan Interface) providers was
+    modified. AMSI connects PowerShell, VBScript, and scripting runtimes to AV
+    engines at the scan interface. Removing or replacing an AMSI provider blinds
+    real-time protection to malicious script content — a prerequisite for
+    script-based evasion attacks.
+    Source: SysmonWatcher (event_type=REGISTRY, subtype=AMSI_TAMPER)
+    """
+    if event['event_type'] != 'REGISTRY':
+        return
+    if event['subtype'] != 'AMSI_TAMPER':
+        return
+    weight   = config.RULE_WEIGHTS[30]
+    alert_id = _make_alert_id(30, event['event_id'])
+    db.insert_detection({
+        'rule_id': 30, 'window_type': 'single',
+        'matched_entities': [event['event_id']],
+        'score_factors': {
+            'actor': event['actor'], 'key': event['destination'],
+            'base_severity': event['base_severity'],
+        },
+        'confidence': weight, 'evidence_refs': [event['event_id']],
+    })
+    db.insert_alert({
+        'alert_id': alert_id, 'rule_id': 30,
+        'severity_current': 'CRITICAL', 'confidence': weight, 'status': 'NEW',
+        'explanation': (
+            f"[Rule 30] AMSI Provider Tampered. "
+            f"Process '{event['actor'] or 'unknown'}' modified the AMSI provider registry key "
+            f"({event['destination'] or 'key not recorded'}). "
+            f"AMSI connects scripting runtimes to AV engines — modifying this key blinds "
+            f"real-time protection to malicious script content. This is a prerequisite "
+            f"step for script-based evasion. "
+            f"Confidence: {weight:.0%}. Evidence: {event['event_id']}."
+        ),
+        'linked_case': None,
+    })
+
+
+def _rule_31(event):
+    """Rule 31 — Unmanaged PS Host / DLL Hijack  (CRITICAL → SUSPICIOUS)
+    Three DLL-load anomalies from Sysmon EID 7:
+      DLL_HIJACK     — DLL loaded from non-standard path (classic hijack vector)
+      UNMANAGED_PWSH — Unmanaged host loaded PS runtime DLL (C2 framework indicator:
+                       Cobalt Strike / Covenant execute PS without launching powershell.exe)
+      DLL_USERPATH   — DLL loaded from user-writable path (supply chain / sideload risk)
+    Severity follows collector assessment.
+    Source: SysmonWatcher (event_type=DLL)
+    """
+    if event['event_type'] != 'DLL':
+        return
+    if event['subtype'] not in ('DLL_HIJACK', 'UNMANAGED_PWSH', 'DLL_USERPATH'):
+        return
+    if event['base_severity'] not in ('CRITICAL', 'SUSPICIOUS'):
+        return
+    weight   = config.RULE_WEIGHTS[31]
+    severity = event['base_severity']
+    alert_id = _make_alert_id(31, event['event_id'])
+    subtype_desc = {
+        'DLL_HIJACK':     'DLL loaded from unexpected path — possible DLL hijack',
+        'UNMANAGED_PWSH': 'unmanaged host loaded PowerShell runtime DLL — C2 framework indicator',
+        'DLL_USERPATH':   'DLL loaded from user-writable path — supply chain / sideload risk',
+    }.get(event['subtype'], event['subtype'])
+    db.insert_detection({
+        'rule_id': 31, 'window_type': 'single',
+        'matched_entities': [event['event_id']],
+        'score_factors': {
+            'subtype': event['subtype'], 'actor': event['actor'],
+            'dll_path': event['process_path'], 'base_severity': severity,
+        },
+        'confidence': weight, 'evidence_refs': [event['event_id']],
+    })
+    db.insert_alert({
+        'alert_id': alert_id, 'rule_id': 31,
+        'severity_current': severity, 'confidence': weight, 'status': 'NEW',
+        'explanation': (
+            f"[Rule 31] DLL Load Anomaly — {event['subtype']}. "
+            f"Process '{event['actor'] or 'unknown'}': {subtype_desc}. "
+            f"DLL path: {event['process_path'] or 'not recorded'}. "
+            f"Confidence: {weight:.0%}. Evidence: {event['event_id']}."
+        ),
+        'linked_case': None,
+    })
+
+
+def _rule_32(event):
+    """Rule 32 — WMI Persistence Binding  (CRITICAL)
+    WMI subscription infrastructure modified: Filter (EID 19), Consumer (EID 20),
+    or FilterToConsumerBinding (EID 21) created/modified. WMI subscriptions are a
+    primary fileless persistence mechanism — survive reboots without disk files and
+    are invisible to Scheduled Task monitoring (CityGuard). A complete persistence
+    triplet requires Filter + Consumer + Binding.
+    Source: SysmonWatcher (event_type=WMI)
+    """
+    if event['event_type'] != 'WMI':
+        return
+    if event['subtype'] not in ('WMI_FILTER', 'WMI_CONSUMER', 'WMI_BINDING'):
+        return
+    if event['base_severity'] not in ('CRITICAL', 'SUSPICIOUS'):
+        return
+    weight   = config.RULE_WEIGHTS[32]
+    alert_id = _make_alert_id(32, event['event_id'])
+    wmi_component = {
+        'WMI_FILTER':   'event filter (trigger condition)',
+        'WMI_CONSUMER': 'event consumer (payload/action)',
+        'WMI_BINDING':  'filter-to-consumer binding (activation link)',
+    }.get(event['subtype'], event['subtype'])
+    db.insert_detection({
+        'rule_id': 32, 'window_type': 'single',
+        'matched_entities': [event['event_id']],
+        'score_factors': {
+            'subtype': event['subtype'], 'actor': event['actor'],
+            'base_severity': event['base_severity'],
+        },
+        'confidence': weight, 'evidence_refs': [event['event_id']],
+    })
+    db.insert_alert({
+        'alert_id': alert_id, 'rule_id': 32,
+        'severity_current': 'CRITICAL', 'confidence': weight, 'status': 'NEW',
+        'explanation': (
+            f"[Rule 32] WMI Persistence Binding. "
+            f"WMI subscription {wmi_component} created by '{event['actor'] or 'unknown'}'. "
+            f"WMI subscriptions survive reboots without disk files and are invisible to "
+            f"Scheduled Task monitoring. A complete persistence triplet requires all three: "
+            f"Filter + Consumer + Binding. Cross-reference EID 19/20/21 events. "
+            f"Confidence: {weight:.0%}. Evidence: {event['event_id']}."
+        ),
+        'linked_case': None,
+    })
+
+
+def _rule_33(event):
+    """Rule 33 — Remote Thread Injection  (CRITICAL)
+    A process created a remote thread in another process (Sysmon EID 8).
+    CreateRemoteThread is the primary mechanism for process injection — DLL injection,
+    shellcode injection, Metasploit, Cobalt Strike. Legitimate software almost never
+    creates threads in other processes outside of debuggers (excluded by sysmonconfig).
+    Source: SysmonWatcher (event_type=INJECTION, subtype=REMOTE_THREAD)
+    """
+    if event['event_type'] != 'INJECTION':
+        return
+    if event['subtype'] != 'REMOTE_THREAD':
+        return
+    weight   = config.RULE_WEIGHTS[33]
+    alert_id = _make_alert_id(33, event['event_id'])
+    db.insert_detection({
+        'rule_id': 33, 'window_type': 'single',
+        'matched_entities': [event['event_id']],
+        'score_factors': {
+            'source': event['actor'], 'target': event['destination'],
+            'base_severity': event['base_severity'],
+        },
+        'confidence': weight, 'evidence_refs': [event['event_id']],
+    })
+    db.insert_alert({
+        'alert_id': alert_id, 'rule_id': 33,
+        'severity_current': 'CRITICAL', 'confidence': weight, 'status': 'NEW',
+        'explanation': (
+            f"[Rule 33] Remote Thread Injection. "
+            f"Process '{event['actor'] or 'unknown'}' created a remote thread in "
+            f"'{event['destination'] or 'unknown target'}'. "
+            f"CreateRemoteThread is the primary code injection mechanism used by C2 frameworks, "
+            f"DLL injection, and shellcode execution. Legitimate software almost never "
+            f"creates threads in other processes. "
+            f"Confidence: {weight:.0%}. Evidence: {event['event_id']}."
+        ),
+        'linked_case': None,
+    })
+
+
+def _rule_34(event):
+    """Rule 34 — LSASS Process Access  (CRITICAL)
+    A process opened a handle to lsass.exe. LSASS stores Windows credentials,
+    Kerberos tickets, and NTLM hashes in memory. Any process accessing LSASS
+    memory is a credential-dumping indicator (Mimikatz, ProcDump, custom tools).
+    Known monitoring processes are whitelisted at the collector level — events
+    reaching here are already assessed CRITICAL or SUSPICIOUS.
+    Source: SysmonWatcher (event_type=PROCESS_ACCESS, subtype=LSASS_ACCESS)
+    """
+    if event['event_type'] != 'PROCESS_ACCESS':
+        return
+    if event['subtype'] != 'LSASS_ACCESS':
+        return
+    if event['base_severity'] not in ('CRITICAL', 'SUSPICIOUS'):
+        return
+    weight   = config.RULE_WEIGHTS[34]
+    alert_id = _make_alert_id(34, event['event_id'])
+    db.insert_detection({
+        'rule_id': 34, 'window_type': 'single',
+        'matched_entities': [event['event_id']],
+        'score_factors': {
+            'source': event['actor'], 'source_path': event['process_path'],
+            'base_severity': event['base_severity'],
+        },
+        'confidence': weight, 'evidence_refs': [event['event_id']],
+    })
+    db.insert_alert({
+        'alert_id': alert_id, 'rule_id': 34,
+        'severity_current': 'CRITICAL', 'confidence': weight, 'status': 'NEW',
+        'explanation': (
+            f"[Rule 34] LSASS Process Access. "
+            f"Process '{event['actor'] or 'unknown'}' opened a handle to lsass.exe. "
+            f"LSASS stores Windows credentials, Kerberos tickets, and NTLM hashes in memory. "
+            f"This is characteristic of credential-dumping tools (Mimikatz, ProcDump). "
+            f"Source path: {event['process_path'] or 'not recorded'}. "
+            f"Confidence: {weight:.0%}. Evidence: {event['event_id']}."
+        ),
+        'linked_case': None,
+    })
+
+
+def _rule_35(event):
+    """Rule 35 — Raw Disk Read  (CRITICAL → SUSPICIOUS)
+    A process opened a raw disk device handle (\\Device\\HarddiskVolumeX), bypassing
+    the file system. Used for offline SAM/NTDS.dit extraction, volume shadow copy
+    abuse, and forensic evasion. Known-good processes (search indexer, AV, defrag,
+    backup) are excluded at the collector whitelist level.
+    Source: SysmonWatcher (event_type=DISK, subtype=RAW_DISK_READ)
+    """
+    if event['event_type'] != 'DISK':
+        return
+    if event['subtype'] != 'RAW_DISK_READ':
+        return
+    if event['base_severity'] not in ('CRITICAL', 'SUSPICIOUS'):
+        return
+    weight   = config.RULE_WEIGHTS[35]
+    severity = event['base_severity']
+    alert_id = _make_alert_id(35, event['event_id'])
+    db.insert_detection({
+        'rule_id': 35, 'window_type': 'single',
+        'matched_entities': [event['event_id']],
+        'score_factors': {
+            'actor': event['actor'], 'device': event['destination'],
+            'process_path': event['process_path'], 'base_severity': severity,
+        },
+        'confidence': weight, 'evidence_refs': [event['event_id']],
+    })
+    db.insert_alert({
+        'alert_id': alert_id, 'rule_id': 35,
+        'severity_current': severity, 'confidence': weight, 'status': 'NEW',
+        'explanation': (
+            f"[Rule 35] Raw Disk Read. "
+            f"Process '{event['actor'] or 'unknown'}' opened a raw disk handle to "
+            f"'{event['destination'] or 'unknown device'}'. "
+            f"Raw disk reads bypass the file system and are used for offline SAM/NTDS.dit "
+            f"extraction, volume shadow copy abuse, and forensic evasion. "
+            f"Process path: {event['process_path'] or 'not recorded'}. "
+            f"Confidence: {weight:.0%}. Evidence: {event['event_id']}."
+        ),
+        'linked_case': None,
+    })
+
+
+def _rule_36(event):
+    """Rule 36 — Unsigned Driver Loaded  (CRITICAL)
+    An unsigned or untrusted driver was loaded (Sysmon EID 6). On modern Windows
+    with Secure Boot and KMCS enforced, unsigned drivers should never load in
+    normal operation. Used for kernel rootkits, BYOD (Bring Your Own Driver)
+    attacks, and hardware-level access below OS visibility.
+    Source: SysmonWatcher (event_type=DRIVER, subtype=UNSIGNED_DRIVER)
+    """
+    if event['event_type'] != 'DRIVER':
+        return
+    if event['subtype'] != 'UNSIGNED_DRIVER':
+        return
+    weight   = config.RULE_WEIGHTS[36]
+    alert_id = _make_alert_id(36, event['event_id'])
+    db.insert_detection({
+        'rule_id': 36, 'window_type': 'single',
+        'matched_entities': [event['event_id']],
+        'score_factors': {
+            'driver': event['actor'], 'driver_path': event['process_path'],
+            'base_severity': event['base_severity'],
+        },
+        'confidence': weight, 'evidence_refs': [event['event_id']],
+    })
+    db.insert_alert({
+        'alert_id': alert_id, 'rule_id': 36,
+        'severity_current': 'CRITICAL', 'confidence': weight, 'status': 'NEW',
+        'explanation': (
+            f"[Rule 36] Unsigned Driver Loaded. "
+            f"Driver '{event['actor'] or 'unknown'}' loaded without a valid digital signature. "
+            f"Driver path: {event['process_path'] or 'not recorded'}. "
+            f"Unsigned drivers on modern Windows indicate a kernel rootkit, BYOD attack, "
+            f"or disabled driver signature enforcement. "
+            f"Confidence: {weight:.0%}. Evidence: {event['event_id']}."
+        ),
+        'linked_case': None,
+    })
+
+
+def _rule_37(event):
+    """Rule 37 — C2 Named Pipe  (CRITICAL → SUSPICIOUS)
+    A process created or connected to a named pipe matching C2 framework patterns
+    (Sysmon EID 17/18). Named pipes are the primary IPC channel used by C2
+    frameworks post-exploitation: Cobalt Strike uses named pipe MSSE-<id>-server,
+    Metasploit/Meterpreter uses its own patterns. The sysmonconfig filter targets
+    known-bad patterns — events here are already assessed by the collector.
+    Source: SysmonWatcher (event_type=PIPE, subtype=PIPE_CREATED|PIPE_CONNECTED)
+    """
+    if event['event_type'] != 'PIPE':
+        return
+    if event['subtype'] not in ('PIPE_CREATED', 'PIPE_CONNECTED'):
+        return
+    if event['base_severity'] not in ('CRITICAL', 'SUSPICIOUS'):
+        return
+    weight      = config.RULE_WEIGHTS[37]
+    severity    = event['base_severity']
+    alert_id    = _make_alert_id(37, event['event_id'])
+    pipe_action = 'created' if event['subtype'] == 'PIPE_CREATED' else 'connected to'
+    db.insert_detection({
+        'rule_id': 37, 'window_type': 'single',
+        'matched_entities': [event['event_id']],
+        'score_factors': {
+            'actor': event['actor'], 'pipe_name': event['destination'],
+            'action': pipe_action, 'base_severity': severity,
+        },
+        'confidence': weight, 'evidence_refs': [event['event_id']],
+    })
+    db.insert_alert({
+        'alert_id': alert_id, 'rule_id': 37,
+        'severity_current': severity, 'confidence': weight, 'status': 'NEW',
+        'explanation': (
+            f"[Rule 37] C2 Named Pipe. "
+            f"Process '{event['actor'] or 'unknown'}' {pipe_action} suspicious named pipe "
+            f"'{event['destination'] or 'pipe name not recorded'}'. "
+            f"C2 frameworks (Cobalt Strike, Metasploit/Meterpreter) use named pipes for "
+            f"inter-process communication between implant and operator tooling. "
+            f"Process path: {event['process_path'] or 'not recorded'}. "
+            f"Confidence: {weight:.0%}. Evidence: {event['event_id']}."
+        ),
+        'linked_case': None,
+    })
+
+
+def _rule_38(event):
+    """Rule 38 — Downloaded Executable  (CRITICAL → SUSPICIOUS)
+    EID 11 (EXECUTABLE_CREATED): executable dropped in a user-writable staging
+    path — payload drop indicator.
+    EID 15 (ZONE_IDENTIFIER): file with Zone.Identifier ADS (Mark of the Web,
+    ZoneId=3) detected — file was downloaded from the internet and has not yet
+    been executed (MOTW is cleared by many droppers on execution).
+    Cross-reference with Rule 29 if the same file later launches as a process.
+    Source: SysmonWatcher (event_type=FILE)
+    """
+    if event['event_type'] != 'FILE':
+        return
+    if event['subtype'] not in ('EXECUTABLE_CREATED', 'ZONE_IDENTIFIER'):
+        return
+    if event['base_severity'] not in ('CRITICAL', 'SUSPICIOUS'):
+        return
+    weight   = config.RULE_WEIGHTS[38]
+    severity = event['base_severity']
+    alert_id = _make_alert_id(38, event['event_id'])
+    subtype_desc = (
+        'executable dropped in high-risk staging path'
+        if event['subtype'] == 'EXECUTABLE_CREATED'
+        else 'internet-origin file (Zone.Identifier / Mark of the Web) detected'
+    )
+    db.insert_detection({
+        'rule_id': 38, 'window_type': 'single',
+        'matched_entities': [event['event_id']],
+        'score_factors': {
+            'subtype': event['subtype'], 'actor': event['actor'],
+            'file_path': event['process_path'], 'base_severity': severity,
+        },
+        'confidence': weight, 'evidence_refs': [event['event_id']],
+    })
+    db.insert_alert({
+        'alert_id': alert_id, 'rule_id': 38,
+        'severity_current': severity, 'confidence': weight, 'status': 'NEW',
+        'explanation': (
+            f"[Rule 38] Downloaded Executable — {event['subtype']}. "
+            f"Process '{event['actor'] or 'unknown'}': {subtype_desc}. "
+            f"File: {event['process_path'] or 'not recorded'}. "
+            f"{'Zone.Identifier present — file not yet executed. ' if event['subtype'] == 'ZONE_IDENTIFIER' else ''}"
+            f"Cross-reference with Rule 29 if the same file later launches as a process. "
+            f"Confidence: {weight:.0%}. Evidence: {event['event_id']}."
+        ),
+        'linked_case': None,
+    })
+
+
+def _rule_39(event):
+    """Rule 39 — Process Hollowing Confirmed  (CRITICAL)
+    Sysmon EID 25 (ProcessTampering) detected process image tampering — the running
+    process memory no longer matches the binary on disk. This is the kernel-level
+    confirmation of process hollowing: a legitimate binary is started, its memory
+    image is unmapped and replaced with a malicious payload. The process appears
+    legitimate in task managers but executes attacker code.
+    Requires Sysmon 13+. One of the highest-confidence injection detections
+    available without a kernel driver.
+    Source: SysmonWatcher (event_type=PROCESS, subtype=PROCESS_TAMPER)
+    """
+    if event['event_type'] != 'PROCESS':
+        return
+    if event['subtype'] != 'PROCESS_TAMPER':
+        return
+    weight   = config.RULE_WEIGHTS[39]
+    alert_id = _make_alert_id(39, event['event_id'])
+    db.insert_detection({
+        'rule_id': 39, 'window_type': 'single',
+        'matched_entities': [event['event_id']],
+        'score_factors': {
+            'actor': event['actor'], 'process_path': event['process_path'],
+            'base_severity': event['base_severity'],
+        },
+        'confidence': weight, 'evidence_refs': [event['event_id']],
+    })
+    db.insert_alert({
+        'alert_id': alert_id, 'rule_id': 39,
+        'severity_current': 'CRITICAL', 'confidence': weight, 'status': 'NEW',
+        'explanation': (
+            f"[Rule 39] Process Hollowing Confirmed. "
+            f"Sysmon EID 25 detected process image tampering for "
+            f"'{event['actor'] or 'unknown'}' ({event['process_path'] or 'path not recorded'}). "
+            f"Running process memory no longer matches the binary on disk — kernel-level "
+            f"signature of process hollowing. A legitimate binary is started and its memory "
+            f"replaced with a malicious payload. Immediate triage required. "
+            f"Confidence: {weight:.0%}. Evidence: {event['event_id']}."
+        ),
+        'linked_case': None,
+    })
+
+
+_TIER_1_RULES = [_rule_6, _rule_21, _rule_8, _rule_19, _rule_10,
+                 _rule_28, _rule_29, _rule_30, _rule_31, _rule_32,
+                 _rule_33, _rule_34, _rule_35, _rule_36, _rule_37,
+                 _rule_38, _rule_39]
 _TIER_2_RULES = [_rule_3, _rule_4, _rule_13, _rule_9, _rule_7, _rule_16,
                  _rule_2, _rule_11, _rule_1, _rule_5, _rule_22, _rule_18, _rule_17]
 

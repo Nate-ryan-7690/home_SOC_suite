@@ -39,6 +39,7 @@ LOG_FILES = {
     "warden":          os.path.join(LOG_DIR, "Warden_Log.txt"),
     "seceventlog":     os.path.join(LOG_DIR, "SecEventLog_Log.txt"),
     "doh_detector":    os.path.join(LOG_DIR, "DoHDetector_Log.txt"),
+    "sysmonwatcher":   os.path.join(LOG_DIR, "SysmonWatcher_Log.txt"),
 }
 
 # ============================================================
@@ -363,6 +364,20 @@ RULE_WEIGHTS = {
     17: 1.0,   18: 0.5,   19: 1.0,   20: 0.5,
     21: 0.8,   22: 0.7,   23: 1.0,   24: 1.0,
     25: 0.8,   26: 0.9,
+    # Sysmon rules — Phase 7A
+    27: 1.0,   # Delayed Initial Access (Harbinger + Sentinel watchlist)
+    28: 1.0,   # Browser Debugger Attachment (EID 10)
+    29: 0.9,   # High-Risk Path Launch (EID 1)
+    30: 1.0,   # AMSI Provider Tampered (EID 12)
+    31: 0.9,   # Unmanaged PS Host / DLL Hijack (EID 7)
+    32: 1.0,   # WMI Persistence Binding (EID 19/20/21)
+    33: 1.0,   # Remote Thread Injection (EID 8)
+    34: 1.0,   # LSASS Process Access (EID 10)
+    35: 1.0,   # Raw Disk Read (EID 9)
+    36: 0.9,   # Unsigned Driver Loaded (EID 6)
+    37: 1.0,   # C2 Named Pipe (EID 17/18)
+    38: 0.7,   # Downloaded Executable (EID 11/15)
+    39: 1.0,   # Process Hollowing Confirmed (EID 25)
 }
 
 # ============================================================
