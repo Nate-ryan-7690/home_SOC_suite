@@ -61,6 +61,7 @@ risk-scored correlation across all data streams. Three programs:
 | 4 | Warden.ps1 | — | Suite watchdog — SHA256 script FIM, log size regression, collector health, maintenance flag, self-watch scheduled task |
 | 5 | SecEventLog.ps1 | — | Windows Security Event Log — logon anomalies, account manipulation, privilege escalation, service installation, brute force detection |
 | 6 | DoH_Detector.ps1 | — | DNS-over-HTTPS evasion detector — TCP connections to 28 known DoH resolver IPs from non-whitelisted processes |
+| 7 | SysmonWatcher.ps1 | — | Sysmon kernel-level event monitor — process injection, LSASS access, raw disk reads, unsigned driver loads, WMI persistence, and browser debugger attachment (22 event IDs) |
 
 ### Analysts
 
@@ -74,7 +75,7 @@ risk-scored correlation across all data streams. Three programs:
 
 ---
 
-## The 26 Correlation Rules
+## Correlation Rules
 
 Defined through multi-round red team analysis (see Documentation). Implemented in Phase 7.
 
@@ -106,6 +107,20 @@ Defined through multi-round red team analysis (see Documentation). Implemented i
 | 24 | Evil Twin / WiFi Ghost | CRITICAL | Network Monitor |
 | 25 | Focus Thief / Window Hijack | HIGH | Win32 API |
 | 26 | Visit Integrity Check | HIGH | All collectors |
+| 27 | Delayed Initial Access | CRITICAL | Harbinger + Sentinel (SQLite watchlist) |
+| 28 | Browser Debugger Attachment | CRITICAL | SysmonWatcher (Event ID 10) |
+| 29 | Kernel Process Injection | CRITICAL | SysmonWatcher (Event ID 8) |
+| 30 | Unsigned Driver Load | CRITICAL | SysmonWatcher (Event ID 6) |
+| 31 | Suspicious Image Load | SUSPICIOUS | SysmonWatcher (Event ID 7) |
+| 32 | WMI Subscription Binding | CRITICAL | SysmonWatcher (Event IDs 19/20/21) |
+| 33 | LSASS Access Suspected | CRITICAL | SysmonWatcher (Event ID 10) |
+| 34 | Raw Disk Read | CRITICAL | SysmonWatcher (Event ID 9) |
+| 35 | Executable File Created | SUSPICIOUS | SysmonWatcher (Event ID 11) |
+| 36 | AMSI Provider Tampered | CRITICAL | SysmonWatcher (Event ID 12) |
+| 37 | Named Pipe Suspicious | SUSPICIOUS | SysmonWatcher (Event IDs 17/18) |
+| 38 | Downloaded Executable | HIGH | SysmonWatcher (Event ID 15) |
+| 39 | Process Hollowing Confirmed | CRITICAL | SysmonWatcher (Event ID 25) |
+| 40 | Persistent Sub-Threshold CPU Load | SUSPICIOUS | Steward + Sentinel |
 
 ---
 
@@ -131,21 +146,33 @@ All logs follow a consistent format for Python parser compatibility:
 
 Logs are stored in a structured folder hierarchy:
 ```
-$RootPath/              — default: Desktop\SOC
-├── Scripts/            — PowerShell collector and analyst scripts
+**Repository structure:**
+```
+home_SOC_suite/
+├── Analysts/           — PowerShell analyst scripts
+├── Collectors/         — PowerShell collector scripts
 ├── Engine/             — Python correlation engine
-│   ├── engine.py       — Main loop and orchestration
-│   ├── log_parser.py   — Collector log ingestion
-│   ├── normalizer.py   — Event normalisation to canonical schema
-│   ├── correlator.py   — Correlation rules engine
-│   ├── alert_manager.py — Alert deduplication, flood detection, log writing
-│   ├── db.py           — SQLite operations (batch ingest, query, retention)
-│   └── config.py       — All thresholds and time windows in one place
-├── Logs/               — Active log files
-│   └── Archives/       — 7-day archived logs
-├── Reports/            — Weekly analyst reports
-├── Config/             — Baseline and manifest files (JSON)
+│   ├── engine.py           — Main loop and orchestration
+│   ├── log_parser.py       — Collector log ingestion
+│   ├── normalizer.py       — Event normalisation to canonical schema
+│   ├── correlator.py       — Correlation rules engine
+│   ├── alert_manager.py    — Alert deduplication, flood detection, log writing
+│   ├── db.py               — SQLite operations (batch ingest, query, retention)
+│   ├── config.py           — All thresholds and time windows in one place
+│   ├── test_parser.py      — Log parser test suite (7 tests)
+│   ├── test_normalizer.py  — Normaliser test suite (28 tests)
+│   └── test_correlator.py  — Correlator test suite (117 tests)
 └── Documentation/      — Research documents and red team analysis
+```
+
+**Generated at runtime (not tracked in repository):**
+```
+Logs/               — Active collector log files
+│   └── Archives/   — 7-day rotated log archives
+Reports/            — Weekly analyst report output
+Config/             — Baseline JSON files and Sysmon config
+Engine/hocsoc.db    — SQLite operational database
+```
 ```
 
 ---
@@ -217,19 +244,20 @@ a red team analysis before the next layer was started.
 
 ## Current State — Phase 7 Complete
 
-The Python correlation engine is built and running live against all 11 collectors.
+The Python correlation engine is built and running live against all 12 collectors,
+including SysmonWatcher (Sysmon kernel-level events).
 
 **Engine pipeline:**
 
 `log_parser.py` → `normalizer.py` → `correlator.py` → `alert_manager.py`
 
 All ingest, normalisation, and correlation steps use batch SQLite transactions.
-124 tests across three test suites — all passing.
+152 tests across three test suites — all passing.
 
-**Rules implemented:** 3, 4, 6, 8, 10, 11, 13, 14, 17, 18, 19, 21 (Tier 1 — single
-event triggers) and 2, 5, 9, 15, 20 (Tier 2 — windowed correlation across sources).
-Rules 7, 16, 22 pending Harbinger data. Rules 23, 24, 25 blocked pending
-specialised collectors.
+**Rules implemented:** 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 16, 17, 18, 21, 22
+(Tier 1 single-event and Tier 2 windowed correlation) and Rules 28–39 (Sysmon kernel
+events via SysmonWatcher). Rules 12, 14, 15, 20 deferred to Tier 4 (require 30-day
+baseline data). Rules 23, 24, 25 blocked pending specialised collectors.
 
 **Detection model:** Hybrid — deterministic rules for clear attack chains,
 risk scoring for cumulative weak signals, visibility alerts for collector
