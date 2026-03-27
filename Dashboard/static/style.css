@@ -294,6 +294,13 @@ button:disabled { opacity: 0.3; cursor: not-allowed; }
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    cursor: pointer;
+}
+
+.event-line.expanded {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: unset;
 }
 
 /* ALERT FEED */

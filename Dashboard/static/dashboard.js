@@ -147,7 +147,7 @@ function refreshSentinel() {
                 <div class="resource-row">
                     <span class="resource-name sev-${r.base_severity || 'OK'}">${r.actor || "—"}</span>
                     <span class="resource-val">${r.destination || "—"}</span>
-                    <span style="color:#333; font-size:10px; flex-shrink:0">
+                    <span style="color:#666; font-size:10px; flex-shrink:0">
                         ${shortTime(r.observed_at)}
                     </span>
                 </div>`).join(""));
@@ -260,7 +260,7 @@ function refreshQuiet() {
                     <div class="event-line sev-${e.base_severity}">
                         [${e.base_severity}] ${e.subtype || ""}
                         ${e.actor ? "— " + e.actor : ""}
-                        <span style="color:#333"> ${shortTime(e.observed_at)}</span>
+                        <span style="color:#666"> ${shortTime(e.observed_at)}</span>
                     </div>`).join("");
             }
         }
@@ -390,3 +390,9 @@ function shortTime(ts) {
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
+
+// Expand/collapse event lines on click (works on dynamically rendered content)
+document.addEventListener('click', e => {
+    const line = e.target.closest('.event-line');
+    if (line) line.classList.toggle('expanded');
+});
