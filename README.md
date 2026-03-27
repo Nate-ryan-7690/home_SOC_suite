@@ -145,8 +145,6 @@ All logs follow a consistent format for Python parser compatibility:
 [yyyy-MM-dd HH:mm:ss] [SEVERITY] Event details
 ```
 
-Logs are stored in a structured folder hierarchy:
-```
 **Repository structure:**
 ```
 home_SOC_suite/
@@ -181,7 +179,6 @@ Logs/               — Active collector log files
 Reports/            — Weekly analyst report output
 Config/             — Baseline JSON files and Sysmon config
 Engine/hocsoc.db    — SQLite operational database
-```
 ```
 
 ---
