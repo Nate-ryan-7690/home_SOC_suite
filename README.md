@@ -21,6 +21,28 @@ Python engine.
 
 ---
 
+## Dashboard Setup
+
+The dashboard runs as a Flask server and requires Administrator elevation for
+collector process detection. Create a shortcut once after cloning:
+
+1. Right-click the Desktop → New → Shortcut
+2. Set the location to:
+   ```
+   pwsh.exe -ExecutionPolicy Bypass -WindowStyle Minimized -File "C:\path\to\SOC\Dashboard\Launch_Dashboard.ps1"
+   ```
+   Replace `C:\path\to\SOC` with your actual install path.
+3. Name it: `SOC Dashboard`
+4. Right-click the shortcut → Properties → Advanced → check **Run as administrator**
+5. Click OK
+
+The shortcut starts Flask, waits for it to be ready, then opens the browser
+automatically. If Flask is already running it skips startup and opens the
+browser directly. Status dots will show grey if the shortcut is run without
+Administrator elevation.
+
+---
+
 ## Architecture
 
 The suite follows a three-layer architecture:
