@@ -1,0 +1,374 @@
+/* ============================================================
+   Night's Watch SOC Dashboard
+   Dark terminal aesthetic — matches the PowerShell windows
+   ============================================================ */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    background: #0d0d0d;
+    color: #c8c8c8;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 13px;
+    padding: 12px;
+}
+
+h2 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: #4af;
+    margin-bottom: 8px;
+}
+
+/* HEADER */
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #222;
+    padding-bottom: 8px;
+    margin-bottom: 12px;
+}
+
+#suite-name {
+    font-size: 15px;
+    font-weight: bold;
+    color: #4af;
+    letter-spacing: 3px;
+}
+
+#session-info { color: #555; font-size: 11px; }
+
+#alert-counter {
+    color: #fa4;
+    font-weight: bold;
+    font-size: 12px;
+}
+
+#alert-counter span { font-size: 16px; }
+
+/* CONTROLS */
+#controls {
+    margin-bottom: 8px;
+    padding: 6px 10px;
+    background: #111;
+    border: 1px solid #222;
+}
+
+#day-controls {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 6px;
+}
+
+button {
+    background: #0d0d1a;
+    color: #4af;
+    border: 1px solid #336;
+    padding: 3px 10px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    transition: background 0.15s, color 0.15s;
+}
+
+button:hover  { background: #4af; color: #000; border-color: #4af; }
+button:disabled { opacity: 0.3; cursor: not-allowed; }
+
+#auditor-output {
+    font-size: 11px;
+    color: #8f8;
+    min-height: 16px;
+    padding-top: 2px;
+}
+
+/* COLLECTOR STATUS ROW */
+#collector-status {
+    margin-bottom: 12px;
+    padding: 10px;
+    background: #111;
+    border: 1px solid #222;
+}
+
+#status-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.status-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: #161616;
+    padding: 4px 10px;
+    border: 1px solid #1e1e1e;
+    font-size: 11px;
+}
+
+/* STATUS DOTS */
+.dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.dot.green { background: #3f3; box-shadow: 0 0 5px #3f3; }
+.dot.red   { background: #f44; box-shadow: 0 0 4px #a22; }
+
+/* LIVE PANELS */
+#live-panels {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.live-panel {
+    background: #111;
+    border: 1px solid #222;
+    padding: 10px;
+}
+
+.panel-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.panel-section { }
+
+.section-label {
+    font-size: 10px;
+    color: #4af;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid #1a1a1a;
+    padding-bottom: 2px;
+}
+
+.panel-footer {
+    font-size: 10px;
+    color: #777;
+    margin-top: 6px;
+    border-top: 1px solid #1a1a1a;
+    padding-top: 4px;
+}
+
+.bar-container {
+    width: 120px;
+    flex-shrink: 0;
+    height: 5px;
+    background: #222;
+    border-radius: 2px;
+    overflow: hidden;
+    margin-right: 8px;
+}
+
+.bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.5s ease;
+}
+
+.bar-fill.low  { background: #3f3; }
+.bar-fill.mid  { background: #cc6; }
+.bar-fill.high { background: #fa4; }
+.bar-fill.max  { background: #f44; }
+
+/* Steward rows: label fixed, bar stretches, value at right — no space-between drift */
+#steward-system .resource-row,
+#steward-disk   .resource-row   { justify-content: flex-start; }
+#steward-system .resource-name,
+#steward-disk   .resource-name  { flex: none; width: 72px; }
+#steward-system .bar-container,
+#steward-disk   .bar-container  { flex: none; }
+
+#sentinel-content {
+    max-height: 192px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #333 #111;
+}
+
+.resource-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 2px 0;
+    border-bottom: 1px solid #161616;
+    gap: 8px;
+}
+
+.resource-name {
+    color: #999;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+}
+
+.resource-val {
+    color: #4af;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.resource-val.mid  { color: #cc6; }
+.resource-val.high { color: #fa4; }
+.resource-val.max  { color: #f44; }
+
+/* SEVERITY COLOURS — base classes for process names in steward top-cpu */
+.sev-CRITICAL   { color: #f44; }
+.sev-SUSPICIOUS { color: #fa4; }
+.sev-UNKNOWN    { color: #aa6; }
+.sev-OK         { color: #3f3; }
+
+/* Higher-specificity overrides so severity wins over .event-line and .resource-name defaults */
+.event-line.sev-CRITICAL,
+.resource-name.sev-CRITICAL   { color: #f44; }
+.event-line.sev-SUSPICIOUS,
+.resource-name.sev-SUSPICIOUS { color: #fa4; }
+.event-line.sev-UNKNOWN,
+.resource-name.sev-UNKNOWN    { color: #aa6; }
+.event-line.sev-OK,
+.resource-name.sev-OK         { color: #3f3; }
+
+/* QUIET COLLECTOR GRID */
+#quiet-section { margin-bottom: 12px; }
+
+#quiet-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 8px;
+}
+
+.quiet-card {
+    background: #111;
+    border: 1px solid #1e1e1e;
+    padding: 8px;
+    transition: border-color 0.3s, background 0.3s;
+}
+
+.quiet-card.alert-highlight    { border-color: #fa4; background: #141006; }
+.quiet-card.critical-highlight { border-color: #f44; background: #140606; }
+
+.card-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #666;
+    margin-bottom: 6px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #1a1a1a;
+}
+
+.card-count {
+    margin-left: auto;
+    color: #333;
+    font-size: 10px;
+}
+
+.card-events {
+    font-size: 11px;
+    max-height: 80px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #222 #111;
+}
+
+.event-line {
+    padding: 2px 0;
+    border-bottom: 1px solid #161616;
+    color: #555;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ALERT FEED */
+#alert-section {
+    margin-bottom: 12px;
+    padding: 10px;
+    background: #111;
+    border: 1px solid #222;
+}
+
+#alert-feed {
+    max-height: 320px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #333 #111;
+}
+
+.alert-row {
+    padding: 6px 8px;
+    margin-bottom: 4px;
+    border-left: 3px solid #222;
+    background: #131313;
+}
+
+.alert-row.CRITICAL   { border-left-color: #f44; }
+.alert-row.SUSPICIOUS { border-left-color: #fa4; }
+.alert-row.HIGH       { border-left-color: #f84; }
+.alert-row.MEDIUM     { border-left-color: #4af; }
+
+.alert-meta {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 3px;
+    font-size: 11px;
+    align-items: baseline;
+}
+
+.alert-sev           { font-weight: bold; }
+.alert-sev.CRITICAL  { color: #f44; }
+.alert-sev.SUSPICIOUS{ color: #fa4; }
+.alert-sev.HIGH      { color: #f84; }
+.alert-sev.MEDIUM    { color: #4af; }
+
+.alert-rule { color: #4af; }
+.alert-conf { color: #555; }
+.alert-time { color: #333; margin-left: auto; }
+
+.alert-explanation {
+    color: #888;
+    line-height: 1.4;
+    font-size: 11px;
+    word-break: break-word;
+}
+
+/* WEEKLY STATUS */
+#weekly-status {
+    font-size: 11px;
+    color: #444;
+    padding: 4px 0;
+}
+
+/* RESPONSIVE — laptop / smaller viewport */
+@media (max-width: 1400px) {
+    body    { font-size: 11px; padding: 8px; }
+
+    #suite-name { font-size: 13px; }
+
+    button  { padding: 5px 12px; }
+
+    #live-panels { grid-template-columns: 1fr; }
+
+    .panel-row   { grid-template-columns: 1fr 1fr; }
+
+    #quiet-grid  { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+
+    #alert-feed      { max-height: 220px; }
+    #sentinel-content { max-height: 92px; }
+}

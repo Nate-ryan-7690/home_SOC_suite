@@ -16,7 +16,7 @@ applies real SOC concepts — baseline collection, anomaly detection, severity
 classification, log aggregation, and cross-source correlation — to a personal
 Windows machine. The design process was adversarial from the start: each phase
 was stress-tested against a red team analysis before the next was built, with
-26 correlation rules defined from those findings driving the architecture of the
+40 correlation rules defined from those findings driving the architecture of the
 Python engine.
 
 ---
@@ -36,11 +36,12 @@ generate weekly summary reports. Run as standard user.
 collector logs, normalises events to a common schema, and runs rule-based and
 risk-scored correlation across all data streams. Three programs:
 
-| Program | Role |
-|---|---|
-| The Brain | Ingest, normalise, correlate, alert (SQLite operational store) |
-| The Dashboard | Live visibility — collector health, alerts, evidence chains (Flask + Chart.js) |
-| The Steward | Forensic archiving — integrity manifests, archive chain hashes, timeline reconstruction |
+| Program | Phase | Role |
+|---|---|---|
+| Correlation Engine | 7 — complete | Ingest, normalise, correlate, alert (SQLite operational store) |
+| SOC Dashboard | 8 — complete | Live visibility — collector health, alerts, evidence chains (Flask) |
+| Forensic Engine | 9 — planned | Post-event investigation — super timelines, process lineage, beacon analysis, persistence audits, append-only evidence databank |
+| Forensic Dashboard | 9 — planned | Summarised forensic conclusions — color-coded status, report generation, evidence navigation |
 
 ---
 
@@ -151,6 +152,14 @@ Logs are stored in a structured folder hierarchy:
 home_SOC_suite/
 ├── Analysts/           — PowerShell analyst scripts
 ├── Collectors/         — PowerShell collector scripts
+├── Dashboard/          — Flask single-page SOC dashboard (Phase 8)
+│   ├── app.py              — Flask server, all routes, process detection, DB reads
+│   ├── Launch_Dashboard.ps1 — Launcher: checks if Flask running, starts it, opens browser
+│   ├── templates/
+│   │   └── index.html      — Single-page dashboard layout
+│   └── static/
+│       ├── style.css       — Dark terminal aesthetic, severity colours, bar graph tiers
+│       └── dashboard.js    — All polling, Start Day / End Day sequence, session alert counter
 ├── Engine/             — Python correlation engine
 │   ├── engine.py           — Main loop and orchestration
 │   ├── log_parser.py       — Collector log ingestion
@@ -239,10 +248,18 @@ a red team analysis before the next layer was started.
   archive hash chain integrity checks at morning/evening bookends via Auditor.ps1
 - **Multi-language Windows compatibility** — performance counter paths
   auto-detected across 8 OS languages at startup
+- **Single-page SOC dashboard** — Flask-based live visibility replacing all
+  individual PowerShell windows. Includes suite launcher (Start Day / End Day),
+  live Steward resource monitor, Sentinel connection feed, per-collector status
+  dots, SUSPICIOUS/CRITICAL event cards, scrollable engine alert feed, session
+  alert counter, and one-click weekly report generation. End Day stops all
+  collectors and runs the evening Auditor bookend — a Shutdown Dashboard button
+  then appears to terminate the Flask process cleanly. The browser tab must be
+  closed manually (browsers do not expose a close API to external processes)
 
 ---
 
-## Current State — Phase 7 Complete
+## Current State — Phase 8 Complete
 
 The Python correlation engine is built and running live against all 12 collectors,
 including SysmonWatcher (Sysmon kernel-level events).
@@ -267,8 +284,9 @@ silence and ingest quality degradation.
 
 | Phase | Program | Status |
 |---|---|---|
-| 8 | The Dashboard — Flask + Chart.js live visibility | Planned |
-| 9 | The Steward — forensic archiving, integrity manifests, timeline reconstruction | Planned |
+| 8 | SOC Dashboard — Flask single-page live visibility | Complete |
+| 9 | Forensic Engine — post-event investigation, append-only evidence databank | Planned |
+| 9 | Forensic Dashboard — summarised findings, report generation, evidence navigation | Planned |
 
 ---
 

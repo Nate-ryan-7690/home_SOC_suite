@@ -66,6 +66,7 @@ $RootPath          = "$env:USERPROFILE\Desktop\SOC"
 $LogFile          = "$RootPath\Logs\Steward_Log.txt"
 $ArchiveFolder    = "$RootPath\Logs\Archives"
 $BaselineFile     = "$RootPath\Config\Steward_Baseline.json"
+$StatusFile       = "$RootPath\Config\Steward_Status.json"
 $TopProcesses     = 5
 $ProcessorCount   = (Get-CimInstance Win32_Processor).NumberOfLogicalProcessors
  
@@ -318,6 +319,37 @@ while ($true) {
         }
     }
  
+    # --- WRITE STATUS FILE (read by Dashboard every 60s) ---
+    try {
+        $StatusData = @{
+            timestamp      = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+            sample         = $SampleCount
+            cpu_total      = $CPUTotal
+            ram_pct        = $RAMPct
+            ram_used_gb    = $RAMUsed
+            ram_total_gb   = $RAMTotal
+            disk_read_kbs  = $DiskRead
+            disk_write_kbs = $DiskWrite
+            top_cpu        = @()
+            top_ram        = @()
+        }
+        if ($TopCPU) {
+            $StatusData.top_cpu = @($TopCPU | ForEach-Object {
+                $Sev = "OK"
+                if ($_.CPUPercent -ge $CPUCritical)      { $Sev = "CRITICAL" }
+                elseif ($_.CPUPercent -ge $CPUSuspicious) { $Sev = "SUSPICIOUS" }
+                elseif ($_.CPUPercent -ge $CPUUnknown)    { $Sev = "UNKNOWN" }
+                @{ name = $_.Name; cpu_pct = $_.CPUPercent; ram_mb = $_.RAM; severity = $Sev }
+            })
+        }
+        $StatusData.top_ram = @($TopRAM | ForEach-Object {
+            $PRAM  = [math]::Round($_.WorkingSet64 / 1MB, 1)
+            $PGRAM = [math]::Round($_.WorkingSet64 / 1GB, 2)
+            @{ name = $_.Name; ram_mb = $PRAM; ram_gb = $PGRAM }
+        })
+        $StatusData | ConvertTo-Json -Depth 3 | Out-File $StatusFile -Encoding UTF8
+    } catch {}
+
     # ==========================================================
     # --- PS 7+ RENDER BRANCH: individual Write-Host calls ---
     # ==========================================================

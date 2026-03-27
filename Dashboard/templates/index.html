@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Night's Watch — SOC Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+    <div id="suite-name">Night's Watch SOC</div>
+    <div id="session-info">Session: <span id="session-start"></span></div>
+    <div id="alert-counter">Alerts this session: <span id="alert-count">0</span></div>
+</header>
+
+<!-- CONTROLS -->
+<section id="controls">
+    <div id="day-controls">
+        <button id="btn-start-day" onclick="startDay()">Start Day</button>
+        <button id="btn-end-day" onclick="endDay()">End Day</button>
+        <button id="btn-weekly" onclick="runWeekly()">Run Weekly Reports</button>
+        <button id="btn-shutdown" onclick="shutdownDashboard()" style="display:none; border-color:#f44; color:#f44;">Shutdown Dashboard</button>
+    </div>
+    <div id="auditor-output"></div>
+</section>
+
+<!-- COLLECTOR STATUS ROW -->
+<section id="collector-status">
+    <h2>Collectors</h2>
+    <div id="status-grid">
+        {% for collector in collectors %}
+        <div class="status-item">
+            <span class="dot red" id="dot-{{ collector }}"></span>
+            <span class="script-name">{{ collector }}</span>
+        </div>
+        {% endfor %}
+        <div class="status-item">
+            <span class="dot red" id="dot-engine"></span>
+            <span class="script-name">Correlation Engine</span>
+        </div>
+    </div>
+</section>
+
+<!-- LIVE PANELS — STEWARD + SENTINEL -->
+<section id="live-panels">
+
+    <div class="live-panel" id="steward-panel">
+        <h2>Steward — Resource Monitor</h2>
+        <div id="steward-content">
+            <div class="panel-row">
+                <div class="panel-section">
+                    <div class="section-label">System Health</div>
+                    <div id="steward-system"></div>
+                </div>
+                <div class="panel-section">
+                    <div class="section-label">Disk I/O</div>
+                    <div id="steward-disk"></div>
+                </div>
+            </div>
+            <div class="panel-row">
+                <div class="panel-section">
+                    <div class="section-label">Top CPU</div>
+                    <div id="steward-cpu"></div>
+                </div>
+                <div class="panel-section">
+                    <div class="section-label">Top RAM</div>
+                    <div id="steward-ram"></div>
+                </div>
+            </div>
+        </div>
+        <div class="panel-footer">Last updated: <span id="steward-updated">—</span></div>
+    </div>
+
+    <div class="live-panel" id="sentinel-panel">
+        <h2>Sentinel — Outbound Connections</h2>
+        <div id="sentinel-content"></div>
+        <div class="panel-footer">Last updated: <span id="sentinel-updated">—</span></div>
+    </div>
+
+</section>
+
+<!-- QUIET COLLECTOR CARDS -->
+<section id="quiet-section">
+    <h2>Collector Events</h2>
+    <div id="quiet-grid">
+        <div class="quiet-card" id="card-cityguard">
+            <div class="card-header">
+                <span class="dot red" id="dot-CITYGUARD.ps1"></span>
+                CityGuard
+                <span class="card-count" id="count-cityguard"></span>
+            </div>
+            <div class="card-events" id="events-cityguard"></div>
+        </div>
+        <div class="quiet-card" id="card-watchman">
+            <div class="card-header">
+                <span class="dot red" id="dot-Watchman.ps1"></span>
+                Watchman
+                <span class="card-count" id="count-watchman"></span>
+            </div>
+            <div class="card-events" id="events-watchman"></div>
+        </div>
+        <div class="quiet-card" id="card-registry_warden">
+            <div class="card-header">
+                <span class="dot red" id="dot-Registry_Warden.ps1"></span>
+                Registry Warden
+                <span class="card-count" id="count-registry_warden"></span>
+            </div>
+            <div class="card-events" id="events-registry_warden"></div>
+        </div>
+        <div class="quiet-card" id="card-seceventlog">
+            <div class="card-header">
+                <span class="dot red" id="dot-SecEventLog.ps1"></span>
+                SecEventLog
+                <span class="card-count" id="count-seceventlog"></span>
+            </div>
+            <div class="card-events" id="events-seceventlog"></div>
+        </div>
+        <div class="quiet-card" id="card-doh_detector">
+            <div class="card-header">
+                <span class="dot red" id="dot-DOH_Detector.ps1"></span>
+                DoH Detector
+                <span class="card-count" id="count-doh_detector"></span>
+            </div>
+            <div class="card-events" id="events-doh_detector"></div>
+        </div>
+        <div class="quiet-card" id="card-bloodhound">
+            <div class="card-header">
+                <span class="dot red" id="dot-Bloodhound.ps1"></span>
+                Bloodhound
+                <span class="card-count" id="count-bloodhound"></span>
+            </div>
+            <div class="card-events" id="events-bloodhound"></div>
+        </div>
+        <div class="quiet-card" id="card-harbinger">
+            <div class="card-header">
+                <span class="dot red" id="dot-Harbinger.ps1"></span>
+                Harbinger
+                <span class="card-count" id="count-harbinger"></span>
+            </div>
+            <div class="card-events" id="events-harbinger"></div>
+        </div>
+        <div class="quiet-card" id="card-warden">
+            <div class="card-header">
+                <span class="dot red" id="dot-Warden.ps1"></span>
+                Warden
+                <span class="card-count" id="count-warden"></span>
+            </div>
+            <div class="card-events" id="events-warden"></div>
+        </div>
+        <div class="quiet-card" id="card-sysmonwatcher">
+            <div class="card-header">
+                <span class="dot red" id="dot-SysmonWatcher.ps1"></span>
+                SysmonWatcher
+                <span class="card-count" id="count-sysmonwatcher"></span>
+            </div>
+            <div class="card-events" id="events-sysmonwatcher"></div>
+        </div>
+    </div>
+</section>
+
+<!-- ALERT FEED -->
+<section id="alert-section">
+    <h2>Engine Alerts</h2>
+    <div id="alert-feed"></div>
+    <div class="panel-footer">Last updated: <span id="alerts-updated">—</span></div>
+</section>
+
+<!-- WEEKLY REPORTS STATUS -->
+<div id="weekly-status"></div>
+
+<script src="/static/dashboard.js"></script>
+</body>
+</html>
