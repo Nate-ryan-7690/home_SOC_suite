@@ -246,7 +246,7 @@ a red team analysis before the next layer was started.
 
 ## Key Features
 
-- **Adversarial design** — 26 correlation rules defined through multi-round red
+- **Adversarial design** — 40 correlation rules defined through multi-round red
   team analysis before the Python engine was built. Detection logic is grounded
   in real attack chains, not hypothetical scenarios
 - **Behavioral baseline collection** — all collectors build baselines over time,
