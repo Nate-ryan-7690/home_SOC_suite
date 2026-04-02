@@ -6,6 +6,7 @@
 # Requires: Administrator elevation (collectors write Admin-only logs)
 #
 # Pipeline each cycle:
+#   0. read_health_files()         — read all 12 health JSONs → hocsoc_health.db
 #   1. log_parser.ingest_all()     — read new lines from all collector logs
 #   2. normalizer.normalize_pending() — map raw_events -> events table
 #   3. correlator.run_all()        — apply all 17 implemented rules
@@ -19,6 +20,7 @@
 # Shutdown: Ctrl+C — logs clean shutdown and exits.
 # ============================================================
 
+import json
 import os
 import sys
 import time
@@ -26,6 +28,7 @@ from datetime import datetime
 
 import config
 import db
+import health_db
 import log_parser
 import normalizer
 import correlator
@@ -50,12 +53,96 @@ def _log(severity: str, message: str):
 
 
 # ============================================================
+# HEALTH FILE READER
+# Step 0 of each cycle — reads all 12 collector health JSONs,
+# updates hocsoc_health.db, and returns count of successful reads.
+# Never raises — unreadable/missing files upsert UNKNOWN status.
+# ============================================================
+
+def read_health_files():
+    """Read all collector health JSON files into health_db.
+    Returns count of files successfully parsed."""
+    now     = datetime.now()
+    success = 0
+
+    for collector_name, health_file in config.HEALTH_FILES.items():
+        try:
+            if not os.path.exists(health_file):
+                health_db.upsert_collector_status(
+                    collector_name=collector_name,
+                    heartbeat_ts=None,
+                    last_recorded=now,
+                    cycle=0,
+                    uptime=None,
+                    status='UNKNOWN',
+                )
+                continue
+
+            with open(health_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            ts_str = data.get('timestamp')
+            try:
+                heartbeat_ts = datetime.strptime(ts_str, '%Y-%m-%d %H:%M:%S')
+            except (TypeError, ValueError):
+                heartbeat_ts = None
+
+            if heartbeat_ts is None:
+                lag    = None
+                status = 'UNKNOWN'
+            else:
+                lag    = (now - heartbeat_ts).total_seconds()
+                status = 'ACTIVE' if lag <= config.HEARTBEAT_SILENCE_THRESHOLD else 'DOWN'
+
+            cycle  = data.get('cycle', 0)
+            uptime = data.get('uptime')
+
+            health_db.upsert_collector_status(
+                collector_name=collector_name,
+                heartbeat_ts=heartbeat_ts,
+                last_recorded=now,
+                cycle=cycle,
+                uptime=uptime,
+                status=status,
+                lag_seconds=lag,
+            )
+
+            if heartbeat_ts is not None:
+                health_db.insert_heartbeat(
+                    collector_name=collector_name,
+                    heartbeat_ts=heartbeat_ts,
+                    recorded_at=now,
+                    cycle=cycle,
+                    uptime=uptime,
+                    lag_seconds=lag,
+                )
+
+            success += 1
+
+        except Exception:
+            # Never crash the cycle — unreadable file → UNKNOWN
+            health_db.upsert_collector_status(
+                collector_name=collector_name,
+                heartbeat_ts=None,
+                last_recorded=now,
+                cycle=0,
+                uptime=None,
+                status='UNKNOWN',
+            )
+
+    return success
+
+
+# ============================================================
 # SINGLE CYCLE
 # ============================================================
 
 def run_cycle():
     """Execute one full pipeline cycle. Returns summary dict."""
     cycle_start = datetime.now()
+
+    # 0. Collector heartbeats
+    health_read = read_health_files()
 
     # 1. Ingest
     ingest_counts = log_parser.ingest_all()
@@ -72,10 +159,12 @@ def run_cycle():
 
     # 5. Retention
     db.enforce_retention()
+    health_db.enforce_retention()
 
     elapsed = (datetime.now() - cycle_start).total_seconds()
 
     return {
+        'health_read':    health_read,
         'ingested':       total_ingested,
         'ingest_detail':  ingest_counts,
         'normalized':     normalized,
@@ -95,6 +184,7 @@ def run_cycle():
 def startup():
     """Initialize DB, verify log directory, log engine start."""
     db.initialize()
+    health_db.initialize()
 
     os.makedirs(config.LOG_DIR, exist_ok=True)
 
@@ -134,6 +224,8 @@ def main():
 
             # Build a concise status line — only log detail when something happened
             parts = [f"cycle={cycle}"]
+            if summary['health_read'] < len(config.HEALTH_FILES):
+                parts.append(f"health={summary['health_read']}/{len(config.HEALTH_FILES)}")
             parts.append(f"ingested={summary['ingested']}")
             parts.append(f"normalized={summary['normalized']}")
             if summary['new_detections']:

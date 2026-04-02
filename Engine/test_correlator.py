@@ -1,11 +1,14 @@
 import os, sqlite3, hashlib
 from datetime import datetime
-import db, normalizer, correlator, config
+import db, health_db, normalizer, correlator, config
 
-# Fresh database
+# Fresh databases
 if os.path.exists('hocsoc.db'):
     os.remove('hocsoc.db')
+if os.path.exists('hocsoc_health.db'):
+    os.remove('hocsoc_health.db')
 db.initialize()
+health_db.initialize()
 
 print('=== correlator.py TESTS ===')
 print()
@@ -1982,15 +1985,15 @@ print('  1 alert after 2 rule evaluations on same data (INSERT OR IGNORE)  PASS'
 
 
 # -------------------------------------------------------
-# Test 68: Rule 18 Part B fires — 50 alerts in last 60s → ENGINE_FLOOD_DETECTED
+# Test 68: Rule 18 Part B fires — N alerts in last 60s → ENGINE_FLOOD_DETECTED
 # -------------------------------------------------------
 print('Test 68: Rule 18 fires ENGINE_FLOOD_DETECTED on alert burst >= threshold...')
 if os.path.exists('hocsoc.db'):
     os.remove('hocsoc.db')
 db.initialize()
 
-for i in range(50):
-    _insert_raw_alert(f'flood_alert_{i:03d}', _R18_FLOOD_TS)
+for i in range(config.ENGINE_FLOOD_THRESHOLD):
+    _insert_raw_alert(f'flood_alert_{i:04d}', _R18_FLOOD_TS)
 
 correlator._rule_18(reference_time=_R18_NOW)
 conn = sqlite3.connect('hocsoc.db')
@@ -2004,15 +2007,15 @@ print('  ENGINE_FLOOD_DETECTED alert fired, threshold in explanation  PASS')
 
 
 # -------------------------------------------------------
-# Test 69: Rule 18 Part B no-fire — 49 alerts (below threshold)
+# Test 69: Rule 18 Part B no-fire — N-1 alerts (below threshold)
 # -------------------------------------------------------
-print('Test 69: Rule 18 ignores alert burst below threshold (49 alerts)...')
+print('Test 69: Rule 18 ignores alert burst below threshold...')
 if os.path.exists('hocsoc.db'):
     os.remove('hocsoc.db')
 db.initialize()
 
-for i in range(49):
-    _insert_raw_alert(f'sub_flood_{i:03d}', _R18_FLOOD_TS)
+for i in range(config.ENGINE_FLOOD_THRESHOLD - 1):
+    _insert_raw_alert(f'sub_flood_{i:04d}', _R18_FLOOD_TS)
 
 correlator._rule_18(reference_time=_R18_NOW)
 conn = sqlite3.connect('hocsoc.db')
@@ -2020,8 +2023,8 @@ r18_flood_count = conn.execute(
     "SELECT COUNT(*) FROM alerts WHERE rule_id=18").fetchone()[0]
 conn.close()
 assert r18_flood_count == 0, \
-    f'Expected no Rule 18 flood alert for 49 alerts (< threshold {config.ENGINE_FLOOD_THRESHOLD}), got {r18_flood_count}'
-print(f'  49 alerts below threshold {config.ENGINE_FLOOD_THRESHOLD} — no flood alert  PASS')
+    f'Expected no Rule 18 flood alert for {config.ENGINE_FLOOD_THRESHOLD - 1} alerts (< threshold {config.ENGINE_FLOOD_THRESHOLD}), got {r18_flood_count}'
+print(f'  {config.ENGINE_FLOOD_THRESHOLD - 1} alerts below threshold {config.ENGINE_FLOOD_THRESHOLD} — no flood alert  PASS')
 
 
 # -------------------------------------------------------
@@ -2032,8 +2035,8 @@ if os.path.exists('hocsoc.db'):
     os.remove('hocsoc.db')
 db.initialize()
 
-for i in range(50):
-    _insert_raw_alert(f'dup_flood_{i:03d}', _R18_FLOOD_TS)
+for i in range(config.ENGINE_FLOOD_THRESHOLD):
+    _insert_raw_alert(f'dup_flood_{i:04d}', _R18_FLOOD_TS)
 
 correlator._rule_18(reference_time=_R18_NOW)
 correlator._rule_18(reference_time=_R18_NOW)

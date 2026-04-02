@@ -24,8 +24,24 @@ LOG_DIR     = os.path.join(ROOT_PATH, "Logs")
 ARCHIVE_DIR = os.path.join(LOG_DIR, "Archives")
 CONFIG_DIR  = os.path.join(ROOT_PATH, "Config")
 ENGINE_DIR  = os.path.join(ROOT_PATH, "Engine")
-DB_PATH     = os.path.join(ENGINE_DIR, "hocsoc.db")
-ALERT_LOG   = os.path.join(LOG_DIR, "Alert_Log.txt")
+DB_PATH        = os.path.join(ENGINE_DIR, "hocsoc.db")
+HEALTH_DB_PATH = os.path.join(ENGINE_DIR, "hocsoc_health.db")
+ALERT_LOG      = os.path.join(LOG_DIR, "Alert_Log.txt")
+
+HEALTH_FILES = {
+    "sentinel":        os.path.join(CONFIG_DIR, "Sentinel_Health.json"),
+    "bulwark":         os.path.join(CONFIG_DIR, "Bulwark_Health.json"),
+    "steward":         os.path.join(CONFIG_DIR, "Steward_Health.json"),
+    "cityguard":       os.path.join(CONFIG_DIR, "CityGuard_Health.json"),
+    "watchman":        os.path.join(CONFIG_DIR, "Watchman_Health.json"),
+    "registry_warden": os.path.join(CONFIG_DIR, "RegistryWarden_Health.json"),
+    "harbinger":       os.path.join(CONFIG_DIR, "Harbinger_Health.json"),
+    "bloodhound":      os.path.join(CONFIG_DIR, "Bloodhound_Health.json"),
+    "warden":          os.path.join(CONFIG_DIR, "Warden_Health.json"),
+    "seceventlog":     os.path.join(CONFIG_DIR, "SecEventLog_Health.json"),
+    "doh_detector":    os.path.join(CONFIG_DIR, "DoHDetector_Health.json"),
+    "sysmonwatcher":   os.path.join(CONFIG_DIR, "SysmonWatcher_Health.json"),
+}
 
 LOG_FILES = {
     "sentinel":        os.path.join(LOG_DIR, "Network_Watchdog_Log.txt"),
@@ -317,8 +333,10 @@ C2_BEACON_MIN_SESSIONS = 3
 # Rotate both periodically — a threshold-aware adversary can
 # pace below these values.
 # ============================================================
-COLLECTOR_SILENCE_THRESHOLD = 1800   # 30 minutes
-ENGINE_FLOOD_THRESHOLD      = 50     # alerts per 60 seconds
+COLLECTOR_SILENCE_THRESHOLD  = 1800   # 30 minutes — log event silence threshold
+HEARTBEAT_SILENCE_THRESHOLD  = 60    # seconds — heartbeat writes every 5s, gap >60s = process dead
+HEARTBEAT_RETENTION_HOURS    = 48    # hours — collector_heartbeats history retained in health.db
+ENGINE_FLOOD_THRESHOLD       = 200   # alerts per 60 seconds — lower to 50 after baseline period
 
 # ============================================================
 # RESOURCE EXFILTRATION PAIRING WINDOW — Rule 1
@@ -378,6 +396,8 @@ RULE_WEIGHTS = {
     37: 1.0,   # C2 Named Pipe (EID 17/18)
     38: 0.7,   # Downloaded Executable (EID 11/15)
     39: 1.0,   # Process Hollowing Confirmed (EID 25)
+    41: 1.0,   # Blind Window Exploitation
+    42: 1.0,   # Coordinated Collector Suppression
 }
 
 # ============================================================

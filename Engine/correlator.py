@@ -31,6 +31,7 @@ from datetime import datetime, timedelta
 
 import config
 import db
+import health_db
 
 
 # ============================================================
@@ -1367,20 +1368,60 @@ def _rule_18(reference_time=None):
     """
     _now = reference_time or datetime.now()
 
-    # --- Part A: Collector silence ---
-    silence_cutoff = _now - timedelta(seconds=config.COLLECTOR_SILENCE_THRESHOLD)
-    hour_bucket    = _now.strftime('%Y-%m-%d-%H')
+    # --- Part A: Collector silence (three-state) ---
+    # QUIET  — heartbeat current, log silent → alive with nothing to report → no alert
+    # DOWN   — heartbeat stale + log silent  → process dead                 → CRITICAL
+    # SILENT — no heartbeat data (legacy)    → original SUSPICIOUS fallback
+    silence_cutoff   = _now - timedelta(seconds=config.COLLECTOR_SILENCE_THRESHOLD)
+    heartbeat_cutoff = _now - timedelta(seconds=config.HEARTBEAT_SILENCE_THRESHOLD)
+    hour_bucket      = _now.strftime('%Y-%m-%d-%H')
 
     for row in db.get_all_collector_health():
         last_seen_dt = _parse_dt(row.get('last_seen'))
         if last_seen_dt is None:
             continue
         if last_seen_dt >= silence_cutoff:
-            continue
+            continue  # log events are current — no silence
 
         collector = row['collector_name']
-        weight    = config.RULE_WEIGHTS[18]
-        alert_id  = _make_alert_id(18, f"silent:{collector}:{hour_bucket}")
+        hb        = health_db.get_collector_status(collector)
+        hb_ts     = _parse_dt(hb.get('last_heartbeat')) if hb else None
+
+        # QUIET — heartbeat is current, log is just quiet (nothing anomalous to report)
+        if hb_ts is not None and hb_ts >= heartbeat_cutoff:
+            continue
+
+        if hb is not None and hb.get('status') == 'DOWN':
+            # DOWN — both log and heartbeat stale → process is dead
+            severity = 'CRITICAL'
+            subtype  = 'COLLECTOR_DOWN'
+            explanation = (
+                f"[Rule 18] COLLECTOR_DOWN: '{collector}' heartbeat has gone silent. "
+                f"Last log event: {row.get('last_seen')}. "
+                f"Last heartbeat: {hb.get('last_heartbeat')}. "
+                f"Both log stream and in-process heartbeat are stale — collector process "
+                f"is dead or was killed. A running collector writes a heartbeat every 5 "
+                f"seconds independent of scan results. Silence here means process "
+                f"termination, not a quiet collection period. "
+                f"Signal in silence — active suppression cannot be ruled out. "
+                f"Confidence: {config.RULE_WEIGHTS[18]:.0%}."
+            )
+        else:
+            # SILENT — no heartbeat data, legacy fallback
+            severity = 'SUSPICIOUS'
+            subtype  = 'COLLECTOR_SILENT'
+            explanation = (
+                f"[Rule 18] Collector silence detected: '{collector}' last seen "
+                f"{row.get('last_seen')}. "
+                f"No new events for >{config.COLLECTOR_SILENCE_THRESHOLD // 60} minutes. "
+                f"No heartbeat data available for cross-reference. "
+                f"Signal in silence — collector may be down, log file missing, "
+                f"or actively suppressed by an adversary. "
+                f"Confidence: {config.RULE_WEIGHTS[18]:.0%}."
+            )
+
+        weight   = config.RULE_WEIGHTS[18]
+        alert_id = _make_alert_id(18, f"{subtype.lower()}:{collector}:{hour_bucket}")
 
         db.insert_detection({
             'rule_id':          18,
@@ -1389,8 +1430,11 @@ def _rule_18(reference_time=None):
             'score_factors': {
                 'collector':           collector,
                 'last_seen':           row.get('last_seen'),
+                'last_heartbeat':      hb.get('last_heartbeat') if hb else None,
+                'heartbeat_status':    hb.get('status') if hb else None,
                 'status':              row.get('status'),
                 'silence_threshold_s': config.COLLECTOR_SILENCE_THRESHOLD,
+                'subtype':             subtype,
             },
             'confidence':    weight,
             'evidence_refs': [],
@@ -1398,18 +1442,11 @@ def _rule_18(reference_time=None):
         db.insert_alert({
             'alert_id':         alert_id,
             'rule_id':          18,
-            'severity_current': 'SUSPICIOUS',
+            'severity_current': severity,
             'confidence':       weight,
             'status':           'NEW',
-            'explanation': (
-                f"[Rule 18] Collector silence detected: '{collector}' last seen "
-                f"{row.get('last_seen')}. "
-                f"No new events for >{config.COLLECTOR_SILENCE_THRESHOLD // 60} minutes. "
-                f"Signal in silence — collector may be down, log file missing, "
-                f"or actively suppressed by an adversary. "
-                f"Confidence: {weight:.0%}."
-            ),
-            'linked_case': None,
+            'explanation':      explanation,
+            'linked_case':      None,
         })
 
     # --- Part B: Alert flood ---
@@ -2258,12 +2295,270 @@ def _rule_39(event):
     })
 
 
+# ============================================================
+# RULE 41 — Blind Window Exploitation
+# RULE 42 — Coordinated Collector Suppression
+# ============================================================
+
+def _emit_blind_alert(rule_id, subtype, down_collector, down_row,
+                       concurrent_events, hour_bucket, severity, explanation, _now):
+    """Shared emit helper for Rule 41 pattern branches."""
+    weight   = config.RULE_WEIGHTS.get(rule_id, 1.0)
+    alert_id = _make_alert_id(rule_id, f"{subtype.lower()}:{down_collector}:{hour_bucket}")
+
+    db.insert_detection({
+        'rule_id':          rule_id,
+        'window_type':      'short',
+        'matched_entities': ([down_collector]
+                             + list({e['collector_name'] for e in concurrent_events})),
+        'score_factors': {
+            'down_collector':    down_collector,
+            'last_heartbeat':    down_row.get('last_heartbeat'),
+            'concurrent_events': len(concurrent_events),
+            'subtype':           subtype,
+        },
+        'confidence':    weight,
+        'evidence_refs': [e['event_id'] for e in concurrent_events],
+    })
+    db.insert_alert({
+        'alert_id':         alert_id,
+        'rule_id':          rule_id,
+        'severity_current': severity,
+        'confidence':       weight,
+        'status':           'NEW',
+        'explanation':      f"{explanation}Confidence: {weight:.0%}.",
+        'linked_case':      None,
+    })
+
+
+def _rule_41(reference_time=None):
+    """Rule 41 — Blind Window Exploitation  [CRITICAL]
+
+    A DOWN collector creates a visibility gap. This rule asks: what happened
+    during that gap? If other collectors report suspicious or critical activity
+    in the SHORT_WINDOW while one collector is silenced, an adversary may be
+    exploiting the blind spot they created.
+
+    Patterns (all checked independently per downed collector):
+      NETWORK_BLIND_PROCESS   — Sentinel/Bulwark DOWN + Harbinger process activity
+      PROCESS_UNDER_BLIND     — Any DOWN + Harbinger CRITICAL process creation
+      PERSISTENCE_UNDER_BLIND — Any DOWN + CityGuard suspicious/critical task event
+      AUTH_COLLECTOR_BLIND    — SecEventLog DOWN + any concurrent suspicious/critical events
+      ACTIVITY_UNDER_BLIND    — Any DOWN + >=2 CRITICAL events from other collectors
+
+    Alert dedup: keyed per rule + subtype + down_collector + hour_bucket.
+    Source: health_db (collector status) + events (concurrent activity).
+    """
+    _now = reference_time or datetime.now()
+
+    down_collectors = [
+        row for row in health_db.get_all_collector_status()
+        if row.get('status') == 'DOWN'
+    ]
+    if not down_collectors:
+        return
+
+    hour_bucket   = _now.strftime('%Y-%m-%d-%H')
+    window_events = db.get_events_in_window(config.SHORT_WINDOW, reference_time=_now)
+
+    for down_row in down_collectors:
+        down_collector = down_row['collector_name']
+
+        other_events = [
+            e for e in window_events
+            if e['collector_name'] != down_collector
+        ]
+        if not other_events:
+            continue
+
+        susp_crit = [
+            e for e in other_events
+            if e['base_severity'] in ('SUSPICIOUS', 'CRITICAL')
+        ]
+
+        # --- NETWORK_BLIND_PROCESS ---
+        # Network monitor killed + Harbinger sees process activity in the gap
+        if down_collector in ('sentinel', 'bulwark'):
+            harbinger_procs = [
+                e for e in susp_crit
+                if e['collector_name'] == 'harbinger'
+                and e['event_type'] == 'PROCESS'
+            ]
+            if harbinger_procs:
+                actors = ', '.join({e['actor'] for e in harbinger_procs if e['actor']})
+                _emit_blind_alert(
+                    rule_id=41, subtype='NETWORK_BLIND_PROCESS',
+                    down_collector=down_collector, down_row=down_row,
+                    concurrent_events=harbinger_procs,
+                    hour_bucket=hour_bucket, severity='CRITICAL',
+                    explanation=(
+                        f"[Rule 41] NETWORK_BLIND_PROCESS: '{down_collector}' "
+                        f"(network monitor) is DOWN. "
+                        f"{len(harbinger_procs)} suspicious process event(s) seen by "
+                        f"Harbinger during the blind window. "
+                        f"Pattern: kill the network monitor, run the payload — "
+                        f"C2 callbacks and exfiltration will be invisible to the "
+                        f"downed collector. Processes: {actors}. "
+                    ),
+                    _now=_now,
+                )
+
+        # --- PROCESS_UNDER_BLIND ---
+        # Any collector down + Harbinger sees a CRITICAL (high-risk path) process
+        crit_procs = [
+            e for e in other_events
+            if e['collector_name'] == 'harbinger'
+            and e['event_type'] == 'PROCESS'
+            and e['base_severity'] == 'CRITICAL'
+        ]
+        if crit_procs:
+            actors = ', '.join({e['actor'] for e in crit_procs if e['actor']})
+            _emit_blind_alert(
+                rule_id=41, subtype='PROCESS_UNDER_BLIND',
+                down_collector=down_collector, down_row=down_row,
+                concurrent_events=crit_procs,
+                hour_bucket=hour_bucket, severity='CRITICAL',
+                explanation=(
+                    f"[Rule 41] PROCESS_UNDER_BLIND: '{down_collector}' is DOWN. "
+                    f"{len(crit_procs)} CRITICAL process event(s) seen by Harbinger "
+                    f"during the blind window. "
+                    f"A high-risk process launched while a collector was silenced. "
+                    f"Processes: {actors}. "
+                ),
+                _now=_now,
+            )
+
+        # --- PERSISTENCE_UNDER_BLIND ---
+        # Any collector down + CityGuard sees a suspicious/critical scheduled task
+        persistence_events = [
+            e for e in susp_crit
+            if e['collector_name'] == 'cityguard'
+            and e['event_type'] == 'TASK'
+        ]
+        if persistence_events:
+            actors = ', '.join({e['actor'] for e in persistence_events if e['actor']})
+            _emit_blind_alert(
+                rule_id=41, subtype='PERSISTENCE_UNDER_BLIND',
+                down_collector=down_collector, down_row=down_row,
+                concurrent_events=persistence_events,
+                hour_bucket=hour_bucket, severity='CRITICAL',
+                explanation=(
+                    f"[Rule 41] PERSISTENCE_UNDER_BLIND: '{down_collector}' is DOWN. "
+                    f"{len(persistence_events)} suspicious scheduled task event(s) "
+                    f"seen by CityGuard during the blind window. "
+                    f"Collector silenced before persistence was installed. "
+                    f"Tasks: {actors}. "
+                ),
+                _now=_now,
+            )
+
+        # --- AUTH_COLLECTOR_BLIND ---
+        # SecEventLog killed + any concurrent suspicious/critical activity
+        if down_collector == 'seceventlog' and susp_crit:
+            sources = ', '.join({e['collector_name'] for e in susp_crit})
+            _emit_blind_alert(
+                rule_id=41, subtype='AUTH_COLLECTOR_BLIND',
+                down_collector=down_collector, down_row=down_row,
+                concurrent_events=susp_crit,
+                hour_bucket=hour_bucket, severity='CRITICAL',
+                explanation=(
+                    f"[Rule 41] AUTH_COLLECTOR_BLIND: 'seceventlog' "
+                    f"(authentication monitor) is DOWN. "
+                    f"{len(susp_crit)} suspicious/critical event(s) seen by other "
+                    f"collectors during the blind window. "
+                    f"Account creation, privilege escalation, and logon events are "
+                    f"currently invisible. Active collectors: {sources}. "
+                ),
+                _now=_now,
+            )
+
+        # --- ACTIVITY_UNDER_BLIND ---
+        # Any collector down + >= 2 CRITICAL events from other collectors
+        crit_any = [
+            e for e in other_events
+            if e['base_severity'] == 'CRITICAL'
+        ]
+        if len(crit_any) >= 2:
+            sources = ', '.join({e['collector_name'] for e in crit_any})
+            _emit_blind_alert(
+                rule_id=41, subtype='ACTIVITY_UNDER_BLIND',
+                down_collector=down_collector, down_row=down_row,
+                concurrent_events=crit_any,
+                hour_bucket=hour_bucket, severity='CRITICAL',
+                explanation=(
+                    f"[Rule 41] ACTIVITY_UNDER_BLIND: '{down_collector}' is DOWN. "
+                    f"{len(crit_any)} CRITICAL event(s) from other collectors "
+                    f"during the blind window. "
+                    f"High-confidence adversarial activity while a collector was silenced. "
+                    f"Reporting collectors: {sources}. "
+                ),
+                _now=_now,
+            )
+
+
+def _rule_42(reference_time=None):
+    """Rule 42 — Coordinated Collector Suppression  [CRITICAL]
+
+    Two or more collectors simultaneously in DOWN state. Simultaneous multi-kill
+    is nearly impossible through coincidental failure — this is coordinated
+    suppression. No event correlation needed; the concurrent dead state is the
+    signal.
+
+    Alert dedup: keyed per hour bucket. Fires once per hour regardless of
+    how many cycles observe the concurrent DOWN state.
+    Source: health_db only.
+    """
+    _now = reference_time or datetime.now()
+
+    down_collectors = [
+        row['collector_name']
+        for row in health_db.get_all_collector_status()
+        if row.get('status') == 'DOWN'
+    ]
+    if len(down_collectors) < 2:
+        return
+
+    hour_bucket = _now.strftime('%Y-%m-%d-%H')
+    weight      = config.RULE_WEIGHTS[42]
+    alert_id    = _make_alert_id(42, f"coordinated_suppression:{hour_bucket}")
+    names       = ', '.join(sorted(down_collectors))
+
+    db.insert_detection({
+        'rule_id':          42,
+        'window_type':      'short',
+        'matched_entities': down_collectors,
+        'score_factors': {
+            'down_collectors': down_collectors,
+            'count':           len(down_collectors),
+        },
+        'confidence':    weight,
+        'evidence_refs': [],
+    })
+    db.insert_alert({
+        'alert_id':         alert_id,
+        'rule_id':          42,
+        'severity_current': 'CRITICAL',
+        'confidence':       weight,
+        'status':           'NEW',
+        'explanation': (
+            f"[Rule 42] COORDINATED_SUPPRESSION: {len(down_collectors)} collectors "
+            f"simultaneously in DOWN state: {names}. "
+            f"Simultaneous multi-collector failure is statistically improbable without "
+            f"adversarial coordination. Each collector runs an independent in-process "
+            f"heartbeat — concurrent death means concurrent kill. "
+            f"Confidence: {weight:.0%}."
+        ),
+        'linked_case': None,
+    })
+
+
 _TIER_1_RULES = [_rule_6, _rule_21, _rule_8, _rule_19, _rule_10,
                  _rule_28, _rule_29, _rule_30, _rule_31, _rule_32,
                  _rule_33, _rule_34, _rule_35, _rule_36, _rule_37,
                  _rule_38, _rule_39]
 _TIER_2_RULES = [_rule_3, _rule_4, _rule_13, _rule_9, _rule_7, _rule_16,
-                 _rule_2, _rule_11, _rule_1, _rule_5, _rule_22, _rule_18, _rule_17]
+                 _rule_2, _rule_11, _rule_1, _rule_5, _rule_22, _rule_18, _rule_17,
+                 _rule_41, _rule_42]
 
 # _TIER_3_RULES = []   # Operational   — populated after baseline month
 # _TIER_4_RULES = []   # Campaign      — populated after baseline month

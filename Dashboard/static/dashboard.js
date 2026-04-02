@@ -7,6 +7,22 @@ const SESSION_START    = new Date();
 let   sessionAlertCount = 0;
 let   knownAlertIds     = new Set();
 
+// Maps health_db collector_name → dot ID suffix (script filename)
+const HEARTBEAT_TO_DOT = {
+    "sentinel":        "Sentinel.ps1",
+    "bulwark":         "Bulwark.ps1",
+    "steward":         "Steward.ps1",
+    "cityguard":       "CITYGUARD.ps1",
+    "watchman":        "Watchman.ps1",
+    "registry_warden": "Registry_Warden.ps1",
+    "harbinger":       "Harbinger.ps1",
+    "bloodhound":      "Bloodhound.ps1",
+    "warden":          "Warden.ps1",
+    "seceventlog":     "SecEventLog.ps1",
+    "doh_detector":    "DOH_Detector.ps1",
+    "sysmonwatcher":   "SysmonWatcher.ps1",
+};
+
 
 // ============================================================
 // INIT
@@ -33,17 +49,40 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // ============================================================
 // STATUS DOTS
+// Three states: green (ACTIVE), amber (UNKNOWN), red (DOWN)
+// Heartbeat is ground truth. Process scan is fallback when
+// hocsoc_health.db has no entry yet (engine not started).
+// Both the status grid dot and the quiet card dot share the
+// same id attribute — querySelectorAll updates both at once.
 // ============================================================
 function refreshStatus() {
-    fetch("/api/status")
-        .then(r => r.json())
-        .then(data => {
-            for (const [script, running] of Object.entries(data)) {
-                document.querySelectorAll('[id="dot-' + script + '"]')
-                    .forEach(dot => dot.className = "dot " + (running ? "green" : "red"));
+    Promise.all([
+        fetch("/api/status").then(r => r.json()),
+        fetch("/api/heartbeat").then(r => r.json())
+    ]).then(([procStatus, heartbeat]) => {
+        // Engine dot — PID file only, no heartbeat
+        document.querySelectorAll('[id="dot-engine"]')
+            .forEach(d => d.className = "dot " + (procStatus["engine"] ? "green" : "red"));
+
+        // Collector dots — heartbeat is ground truth, process scan is fallback
+        for (const [hbName, dotName] of Object.entries(HEARTBEAT_TO_DOT)) {
+            const hb = heartbeat[hbName];
+            let color;
+            if (!hb) {
+                // No health_db entry yet — engine hasn't run; use process detection
+                color = procStatus[dotName] ? "amber" : "red";
+            } else if (hb.status === "ACTIVE") {
+                color = "green";
+            } else if (hb.status === "DOWN") {
+                color = "red";
+            } else {
+                // UNKNOWN — file missing or unreadable
+                color = "amber";
             }
-        })
-        .catch(() => {});
+            document.querySelectorAll('[id="dot-' + dotName + '"]')
+                .forEach(d => d.className = "dot " + color);
+        }
+    }).catch(() => {});
 }
 
 

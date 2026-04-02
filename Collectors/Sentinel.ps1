@@ -6,6 +6,7 @@
 $RootPath = "$env:USERPROFILE\Desktop\SOC"
 $LogFile = "$RootPath\Logs\Network_Watchdog_Log.txt"
 $ArchiveFolder = "$RootPath\Logs\Archives"
+$HealthFile = "$RootPath\Config\Sentinel_Health.json"
 $MyIP = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -like "*Ethernet*" -or $_.InterfaceAlias -like "*Wi-Fi*" } | Select-Object -First 1).IPAddress
 $Network = (($MyIP -split "\.")[0..2] -join ".")
 $IPCache = @{}
@@ -14,6 +15,7 @@ $SeenConnectionTimes = @{}
 $TransferTracker = @{}
 $TransferFile = "$RootPath\Config\Transfer_Baseline.json"
 $SampleCount = 0
+$ScriptStartTime = Get-Date
 
 if (Test-Path $TransferFile) {
     $TransferTracker = Get-Content $TransferFile | ConvertFrom-Json | ForEach-Object {
@@ -50,8 +52,31 @@ if (-not (Test-Path $LogFile)) {
     "------------------------------------------------`n" | Out-File $LogFile -Append
 }
 
+# --- HEARTBEAT RUNSPACE ---
+$SharedState = [System.Collections.Hashtable]::Synchronized(@{
+    Running         = $true
+    CycleCount      = 0
+    ScriptStartTime = $ScriptStartTime
+    HealthFile      = $HealthFile
+    CollectorName   = "sentinel"
+})
+$HeartbeatRS = [RunspaceFactory]::CreateRunspace()
+$HeartbeatRS.Open()
+$HeartbeatPS = [PowerShell]::Create()
+$HeartbeatPS.Runspace = $HeartbeatRS
+$HeartbeatPS.AddScript({
+    param($S)
+    while ($S.Running) {
+        $Uptime = (Get-Date) - $S.ScriptStartTime
+        @{ collector=$S.CollectorName; timestamp=(Get-Date -Format "yyyy-MM-dd HH:mm:ss"); status="ACTIVE"; uptime="$([math]::Floor($Uptime.TotalHours))h$($Uptime.Minutes)m$($Uptime.Seconds)s"; cycle=$S.CycleCount } | ConvertTo-Json -Compress | Out-File $S.HealthFile -Encoding UTF8
+        Start-Sleep -Seconds 5
+    }
+}).AddArgument($SharedState) | Out-Null
+$HeartbeatPS.BeginInvoke() | Out-Null
+
 while($true) {
     $SampleCount++
+    $SharedState.CycleCount = $SampleCount
     # 1. EXPIRE OLD CACHE ENTRIES FIRST
     $ExpiredKeys = $SeenConnections.Keys | Where-Object {
         ((Get-Date) - $SeenConnectionTimes[$_]).TotalMinutes -gt 60
@@ -158,5 +183,5 @@ while($true) {
     }
     Write-Host "`nAutomated Archiving Enabled (7 Day Cycle)."
     Start-Sleep -Seconds 5
-    
+
 }

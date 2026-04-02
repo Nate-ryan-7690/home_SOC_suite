@@ -38,12 +38,28 @@ DASHBOARD_PORT = 5000
 # ============================================================
 # DERIVED PATHS — do not edit below unless structure changed
 # ============================================================
-DB_PATH       = os.path.join(ROOT_PATH, "Engine", "hocsoc.db")
-SCRIPTS_PATH  = os.path.join(ROOT_PATH, "Scripts")
-LOG_PATH      = os.path.join(ROOT_PATH, "Logs")
-CONFIG_PATH   = os.path.join(ROOT_PATH, "Config")
-REPORTS_PATH  = os.path.join(ROOT_PATH, "Reports")
-STATUS_FILE   = os.path.join(CONFIG_PATH, "Steward_Status.json")
+DB_PATH                     = os.path.join(ROOT_PATH, "Engine", "hocsoc.db")
+SCRIPTS_PATH                = os.path.join(ROOT_PATH, "Scripts")
+LOG_PATH                    = os.path.join(ROOT_PATH, "Logs")
+CONFIG_PATH                 = os.path.join(ROOT_PATH, "Config")
+REPORTS_PATH                = os.path.join(ROOT_PATH, "Reports")
+STATUS_FILE                 = os.path.join(CONFIG_PATH, "Steward_Status.json")
+HEARTBEAT_SILENCE_THRESHOLD = 60   # seconds — matches engine config
+
+HEALTH_FILES = {
+    "sentinel":        os.path.join(CONFIG_PATH, "Sentinel_Health.json"),
+    "bulwark":         os.path.join(CONFIG_PATH, "Bulwark_Health.json"),
+    "steward":         os.path.join(CONFIG_PATH, "Steward_Health.json"),
+    "cityguard":       os.path.join(CONFIG_PATH, "CityGuard_Health.json"),
+    "watchman":        os.path.join(CONFIG_PATH, "Watchman_Health.json"),
+    "registry_warden": os.path.join(CONFIG_PATH, "RegistryWarden_Health.json"),
+    "harbinger":       os.path.join(CONFIG_PATH, "Harbinger_Health.json"),
+    "bloodhound":      os.path.join(CONFIG_PATH, "Bloodhound_Health.json"),
+    "warden":          os.path.join(CONFIG_PATH, "Warden_Health.json"),
+    "seceventlog":     os.path.join(CONFIG_PATH, "SecEventLog_Health.json"),
+    "doh_detector":    os.path.join(CONFIG_PATH, "DoHDetector_Health.json"),
+    "sysmonwatcher":   os.path.join(CONFIG_PATH, "SysmonWatcher_Health.json"),
+}
 
 # ============================================================
 # COLLECTOR DEFINITIONS
@@ -165,6 +181,38 @@ def api_debug_procs():
                         "returncode": result.returncode})
     except Exception as e:
         return jsonify({"error": str(e)})
+
+
+@app.route("/api/heartbeat")
+def api_heartbeat():
+    """Collector liveness from health JSON files written by each collector.
+    Reads files directly — no engine dependency. Status computed against
+    current time so dots go red immediately when a collector stops writing.
+    Called every 5s."""
+    now    = datetime.now()
+    result = {}
+    for name, path in HEALTH_FILES.items():
+        try:
+            if not os.path.exists(path):
+                result[name] = {"status": "UNKNOWN", "last_heartbeat": None,
+                                "lag_seconds": None, "cycle": 0, "uptime": None}
+                continue
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            ts_str = data.get('timestamp')
+            hb_ts  = datetime.strptime(ts_str, '%Y-%m-%d %H:%M:%S')
+            lag    = (now - hb_ts).total_seconds()
+            result[name] = {
+                "status":         "ACTIVE" if lag <= HEARTBEAT_SILENCE_THRESHOLD else "DOWN",
+                "last_heartbeat": ts_str,
+                "lag_seconds":    round(lag, 1),
+                "cycle":          data.get('cycle', 0),
+                "uptime":         data.get('uptime'),
+            }
+        except Exception:
+            result[name] = {"status": "UNKNOWN", "last_heartbeat": None,
+                            "lag_seconds": None, "cycle": 0, "uptime": None}
+    return jsonify(result)
 
 
 @app.route("/api/steward")

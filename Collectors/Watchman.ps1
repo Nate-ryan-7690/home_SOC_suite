@@ -15,6 +15,7 @@ chcp 65001 | Out-Null
 $RootPath        = "$env:USERPROFILE\Desktop\SOC"
 $LogFile        = "$RootPath\Logs\Watchman_Log.txt"
 $ArchiveFolder  = "$RootPath\Logs\Archives"
+$HealthFile     = "$RootPath\Config\Watchman_Health.json"
 $RefreshSeconds = 60
 $LastEventTime  = $null
 
@@ -120,8 +121,35 @@ try {
 Write-Host "--- [MONITORING STARTED] ---`n" -ForegroundColor Cyan
 Start-Sleep -Seconds 2
 
+$ScriptStartTime = Get-Date
+$CycleCount      = 0
+
+# --- HEARTBEAT RUNSPACE ---
+$SharedState = [System.Collections.Hashtable]::Synchronized(@{
+    Running         = $true
+    CycleCount      = 0
+    ScriptStartTime = $ScriptStartTime
+    HealthFile      = $HealthFile
+    CollectorName   = "watchman"
+})
+$HeartbeatRS = [RunspaceFactory]::CreateRunspace()
+$HeartbeatRS.Open()
+$HeartbeatPS = [PowerShell]::Create()
+$HeartbeatPS.Runspace = $HeartbeatRS
+$HeartbeatPS.AddScript({
+    param($S)
+    while ($S.Running) {
+        $Uptime = (Get-Date) - $S.ScriptStartTime
+        @{ collector=$S.CollectorName; timestamp=(Get-Date -Format "yyyy-MM-dd HH:mm:ss"); status="ACTIVE"; uptime="$([math]::Floor($Uptime.TotalHours))h$($Uptime.Minutes)m$($Uptime.Seconds)s"; cycle=$S.CycleCount } | ConvertTo-Json -Compress | Out-File $S.HealthFile -Encoding UTF8
+        Start-Sleep -Seconds 5
+    }
+}).AddArgument($SharedState) | Out-Null
+$HeartbeatPS.BeginInvoke() | Out-Null
+
 # --- MAIN MONITORING LOOP ---
 while ($true) {
+    $CycleCount++
+    $SharedState.CycleCount = $CycleCount
     Clear-Host
     $Now = Get-Date -Format "HH:mm:ss"
     Write-Host "--- [WATCHMAN DASHBOARD | $Now] ---" -ForegroundColor Cyan

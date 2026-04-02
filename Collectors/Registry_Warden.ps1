@@ -15,6 +15,7 @@ $RootPath        = "$env:USERPROFILE\Desktop\SOC"
 $LogFile         = "$RootPath\Logs\RegistryWarden_Log.txt"
 $ArchiveFolder   = "$RootPath\Logs\Archives"
 $BaselineFile    = "$RootPath\Config\RegistryWarden_Baseline.json"
+$HealthFile      = "$RootPath\Config\RegistryWarden_Health.json"
 $RefreshSeconds  = 60
 $ServiceInterval = 5    # Scan services every N cycles (~5 minutes)
 
@@ -208,9 +209,33 @@ Start-Sleep -Seconds 2
 # --- MAIN MONITORING LOOP ---
 $ScanCount       = 0
 $BaselineChanged = $false
+$ScriptStartTime = Get-Date
+
+# --- HEARTBEAT RUNSPACE ---
+$SharedState = [System.Collections.Hashtable]::Synchronized(@{
+    Running         = $true
+    CycleCount      = 0
+    ScriptStartTime = $ScriptStartTime
+    HealthFile      = $HealthFile
+    CollectorName   = "registry_warden"
+})
+$HeartbeatRS = [RunspaceFactory]::CreateRunspace()
+$HeartbeatRS.Open()
+$HeartbeatPS = [PowerShell]::Create()
+$HeartbeatPS.Runspace = $HeartbeatRS
+$HeartbeatPS.AddScript({
+    param($S)
+    while ($S.Running) {
+        $Uptime = (Get-Date) - $S.ScriptStartTime
+        @{ collector=$S.CollectorName; timestamp=(Get-Date -Format "yyyy-MM-dd HH:mm:ss"); status="ACTIVE"; uptime="$([math]::Floor($Uptime.TotalHours))h$($Uptime.Minutes)m$($Uptime.Seconds)s"; cycle=$S.CycleCount } | ConvertTo-Json -Compress | Out-File $S.HealthFile -Encoding UTF8
+        Start-Sleep -Seconds 5
+    }
+}).AddArgument($SharedState) | Out-Null
+$HeartbeatPS.BeginInvoke() | Out-Null
 
 while ($true) {
     $ScanCount++
+    $SharedState.CycleCount = $ScanCount
     $BaselineChanged = $false
     Clear-Host
     $Now = Get-Date -Format "HH:mm:ss"

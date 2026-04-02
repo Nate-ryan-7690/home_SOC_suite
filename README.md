@@ -16,7 +16,7 @@ applies real SOC concepts — baseline collection, anomaly detection, severity
 classification, log aggregation, and cross-source correlation — to a personal
 Windows machine. The design process was adversarial from the start: each phase
 was stress-tested against a red team analysis before the next was built, with
-40 correlation rules defined from those findings driving the architecture of the
+42 correlation rules defined from those findings driving the architecture of the
 Python engine.
 
 ---
@@ -144,6 +144,8 @@ Defined through multi-round red team analysis (see Documentation). Implemented i
 | 38 | Downloaded Executable | HIGH | SysmonWatcher (Event ID 15) |
 | 39 | Process Hollowing Confirmed | CRITICAL | SysmonWatcher (Event ID 25) |
 | 40 | Persistent Sub-Threshold CPU Load | SUSPICIOUS | Steward + Sentinel |
+| 41 | Blind Window Exploitation | HIGH/CRITICAL | Python Engine (collector DOWN + concurrent events) |
+| 42 | Coordinated Collector Suppression | CRITICAL | Python Engine (≥2 collectors simultaneously DOWN) |
 
 ---
 
@@ -187,10 +189,11 @@ home_SOC_suite/
 │   ├── correlator.py       — Correlation rules engine
 │   ├── alert_manager.py    — Alert deduplication, flood detection, log writing
 │   ├── db.py               — SQLite operations (batch ingest, query, retention)
+│   ├── health_db.py        — Heartbeat SQLite store (collector_status, heartbeats tables)
 │   ├── config.py           — All thresholds and time windows in one place
 │   ├── test_parser.py      — Log parser test suite (7 tests)
 │   ├── test_normalizer.py  — Normaliser test suite (28 tests)
-│   └── test_correlator.py  — Correlator test suite (117 tests)
+│   └── test_correlator.py  — Correlator test suite (121 tests)
 └── Documentation/      — Research documents and red team analysis
 ```
 
@@ -201,6 +204,7 @@ Logs/               — Active collector log files
 Reports/            — Weekly analyst report output
 Config/             — Baseline JSON files and Sysmon config
 Engine/hocsoc.db    — SQLite operational database
+Engine/hocsoc_health.db — Heartbeat and collector status store (engine correlation use only)
 ```
 
 ---
@@ -269,12 +273,14 @@ a red team analysis before the next layer was started.
   auto-detected across 8 OS languages at startup
 - **Single-page SOC dashboard** — Flask-based live visibility replacing all
   individual PowerShell windows. Includes suite launcher (Start Day / End Day),
-  live Steward resource monitor, Sentinel connection feed, per-collector status
-  dots, SUSPICIOUS/CRITICAL event cards, scrollable engine alert feed, session
-  alert counter, and one-click weekly report generation. End Day stops all
-  collectors and runs the evening Auditor bookend — a Shutdown Dashboard button
-  then appears to terminate the Flask process cleanly. The browser tab must be
-  closed manually (browsers do not expose a close API to external processes)
+  live Steward resource monitor, Sentinel connection feed, three-state heartbeat
+  dots (green active / amber not started / red down — read directly from collector
+  health JSON files, independent of engine state), SUSPICIOUS/CRITICAL event cards,
+  scrollable engine alert feed, session alert counter, and one-click weekly report
+  generation. End Day stops all collectors and runs the evening Auditor bookend — a
+  Shutdown Dashboard button then appears to terminate the Flask process cleanly. The
+  browser tab must be closed manually (browsers do not expose a close API to external
+  processes)
 
 ---
 
@@ -288,9 +294,9 @@ including SysmonWatcher (Sysmon kernel-level events).
 `log_parser.py` → `normalizer.py` → `correlator.py` → `alert_manager.py`
 
 All ingest, normalisation, and correlation steps use batch SQLite transactions.
-152 tests across three test suites — all passing.
+156 tests across three test suites — all passing.
 
-**Rules implemented:** 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 16, 17, 18, 21, 22
+**Rules implemented:** 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 16, 17, 18, 21, 22, 41, 42
 (Tier 1 single-event and Tier 2 windowed correlation) and Rules 28–39 (Sysmon kernel
 events via SysmonWatcher). Rules 12, 14, 15, 20 deferred to Tier 4 (require 30-day
 baseline data). Rules 23, 24, 25 blocked pending specialised collectors.

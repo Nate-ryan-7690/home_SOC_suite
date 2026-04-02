@@ -23,6 +23,7 @@ chcp 65001 | Out-Null
 $RootPath              = "$env:USERPROFILE\Desktop\SOC"
 $LogFile               = "$RootPath\Logs\Warden_Log.txt"
 $ArchiveFolder         = "$RootPath\Logs\Archives"
+$HealthFile            = "$RootPath\Config\Warden_Health.json"
 $ManifestFile          = "$RootPath\Config\Warden_Manifest.json"
 $LogSizeFile           = "$RootPath\Config\Warden_LogSizes.json"
 $SelfCheckScript       = "$RootPath\Config\Warden_SelfCheck.ps1"
@@ -41,7 +42,8 @@ $ExpectedCollectors = @(
     "Watchman.ps1",
     "Registry_Warden.ps1",
     "Harbinger.ps1",
-    "Bloodhound.ps1"
+    "Bloodhound.ps1",
+    "SysmonWatcher.ps1"   # Phase 7A — Sysmon kernel-level event collector
 )
 
 # ============================================================
@@ -352,6 +354,29 @@ $LogSizes         = Initialize-LogSizes
 $ScanCount        = 0
 $MaintenanceStart = $null
 $HeartbeatAt      = (Get-Date).AddSeconds(60)
+$ScriptStartTime  = Get-Date
+
+# --- HEARTBEAT RUNSPACE ---
+$SharedState = [System.Collections.Hashtable]::Synchronized(@{
+    Running         = $true
+    CycleCount      = 0
+    ScriptStartTime = $ScriptStartTime
+    HealthFile      = $HealthFile
+    CollectorName   = "warden"
+})
+$HeartbeatRS = [RunspaceFactory]::CreateRunspace()
+$HeartbeatRS.Open()
+$HeartbeatPS = [PowerShell]::Create()
+$HeartbeatPS.Runspace = $HeartbeatRS
+$HeartbeatPS.AddScript({
+    param($S)
+    while ($S.Running) {
+        $Uptime = (Get-Date) - $S.ScriptStartTime
+        @{ collector=$S.CollectorName; timestamp=(Get-Date -Format "yyyy-MM-dd HH:mm:ss"); status="ACTIVE"; uptime="$([math]::Floor($Uptime.TotalHours))h$($Uptime.Minutes)m$($Uptime.Seconds)s"; cycle=$S.CycleCount } | ConvertTo-Json -Compress | Out-File $S.HealthFile -Encoding UTF8
+        Start-Sleep -Seconds 5
+    }
+}).AddArgument($SharedState) | Out-Null
+$HeartbeatPS.BeginInvoke() | Out-Null
 
 Write-Host "[OK] Log size baseline: $($LogSizes.Count) files monitored."  -ForegroundColor Green
 Write-Host "--- [MONITORING STARTED | Refresh: ${RefreshSeconds}s] ---`n" -ForegroundColor Cyan
@@ -361,6 +386,7 @@ Write-Host "--- [MONITORING STARTED | Refresh: ${RefreshSeconds}s] ---`n" -Foreg
 # ============================================================
 while ($true) {
     $ScanCount++
+    $SharedState.CycleCount = $ScanCount
     $Now    = Get-Date
     $NowStr = $Now.ToString("HH:mm:ss")
 

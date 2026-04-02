@@ -28,6 +28,13 @@
 <!-- COLLECTOR STATUS ROW -->
 <section id="collector-status">
     <h2>Collectors</h2>
+    <div id="dot-legend">
+        <span class="dot green"></span>&nbsp;Active (heartbeat current)
+        &nbsp;&nbsp;&nbsp;
+        <span class="dot amber"></span>&nbsp;Not started (health file missing)
+        &nbsp;&nbsp;&nbsp;
+        <span class="dot red"></span>&nbsp;Down (heartbeat stopped)
+    </div>
     <div id="status-grid">
         {% for collector in collectors %}
         <div class="status-item">

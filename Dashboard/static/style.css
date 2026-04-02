@@ -93,6 +93,16 @@ button:disabled { opacity: 0.3; cursor: not-allowed; }
     border: 1px solid #222;
 }
 
+#dot-legend {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    color: #444;
+    margin-bottom: 10px;
+    letter-spacing: 0.5px;
+}
+
 #status-grid {
     display: flex;
     flex-wrap: wrap;
@@ -119,6 +129,7 @@ button:disabled { opacity: 0.3; cursor: not-allowed; }
 }
 
 .dot.green { background: #3f3; box-shadow: 0 0 5px #3f3; }
+.dot.amber { background: #fa4; box-shadow: 0 0 5px #874; }
 .dot.red   { background: #f44; box-shadow: 0 0 4px #a22; }
 
 /* LIVE PANELS */

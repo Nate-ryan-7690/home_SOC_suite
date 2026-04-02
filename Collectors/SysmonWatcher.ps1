@@ -21,6 +21,7 @@ chcp 65001 | Out-Null
 $RootPath      = "$env:USERPROFILE\Desktop\SOC"
 $LogFile       = "$RootPath\Logs\SysmonWatcher_Log.txt"
 $ArchiveFolder = "$RootPath\Logs\Archives"
+$HealthFile    = "$RootPath\Config\SysmonWatcher_Health.json"
 
 $PollInterval  = 30   # seconds between Sysmon log polls
 
@@ -246,7 +247,31 @@ try {
     Write-Log "UNKNOWN" "Could not prime LastRecordId: $($_.Exception.Message)"
 }
 
-$HeartbeatAt = (Get-Date).AddSeconds(60)
+$HeartbeatAt     = (Get-Date).AddSeconds(60)
+$ScriptStartTime = Get-Date
+$CycleCount      = 0
+
+# --- HEARTBEAT RUNSPACE ---
+$SharedState = [System.Collections.Hashtable]::Synchronized(@{
+    Running         = $true
+    CycleCount      = 0
+    ScriptStartTime = $ScriptStartTime
+    HealthFile      = $HealthFile
+    CollectorName   = "sysmon_watcher"
+})
+$HeartbeatRS = [RunspaceFactory]::CreateRunspace()
+$HeartbeatRS.Open()
+$HeartbeatPS = [PowerShell]::Create()
+$HeartbeatPS.Runspace = $HeartbeatRS
+$HeartbeatPS.AddScript({
+    param($S)
+    while ($S.Running) {
+        $Uptime = (Get-Date) - $S.ScriptStartTime
+        @{ collector=$S.CollectorName; timestamp=(Get-Date -Format "yyyy-MM-dd HH:mm:ss"); status="ACTIVE"; uptime="$([math]::Floor($Uptime.TotalHours))h$($Uptime.Minutes)m$($Uptime.Seconds)s"; cycle=$S.CycleCount } | ConvertTo-Json -Compress | Out-File $S.HealthFile -Encoding UTF8
+        Start-Sleep -Seconds 5
+    }
+}).AddArgument($SharedState) | Out-Null
+$HeartbeatPS.BeginInvoke() | Out-Null
 
 Write-Host "--- [MONITORING STARTED | Poll every ${PollInterval}s] ---`n" -ForegroundColor Cyan
 
@@ -254,6 +279,8 @@ Write-Host "--- [MONITORING STARTED | Poll every ${PollInterval}s] ---`n" -Foreg
 # MAIN MONITORING LOOP
 # ============================================================
 while ($true) {
+    $CycleCount++
+    $SharedState.CycleCount = $CycleCount
     $Now    = Get-Date
     $NowStr = $Now.ToString("HH:mm:ss")
 

@@ -16,6 +16,7 @@ $RootPath      = "$env:USERPROFILE\Desktop\SOC"
 $LogFile       = "$RootPath\Logs\Harbinger_Log.txt"
 $ArchiveFolder = "$RootPath\Logs\Archives"
 $BaselineFile  = "$RootPath\Config\Harbinger_Baseline.json"
+$HealthFile    = "$RootPath\Config\Harbinger_Health.json"
 $HeartbeatSecs = 30    # Seconds between status lines when idle
 
 # --- HIGH RISK EXECUTION PATHS ---
@@ -182,11 +183,37 @@ try {
 
 Write-Host "--- [MONITORING STARTED | $(Get-Date -Format 'HH:mm:ss')] ---`n" -ForegroundColor Cyan
 
-$EventCount    = 0
-$LastHeartbeat = Get-Date
+$EventCount      = 0
+$LastHeartbeat   = Get-Date
+$ScriptStartTime = Get-Date
+$CycleCount      = 0
+
+# --- HEARTBEAT RUNSPACE ---
+$SharedState = [System.Collections.Hashtable]::Synchronized(@{
+    Running         = $true
+    CycleCount      = 0
+    ScriptStartTime = $ScriptStartTime
+    HealthFile      = $HealthFile
+    CollectorName   = "harbinger"
+})
+$HeartbeatRS = [RunspaceFactory]::CreateRunspace()
+$HeartbeatRS.Open()
+$HeartbeatPS = [PowerShell]::Create()
+$HeartbeatPS.Runspace = $HeartbeatRS
+$HeartbeatPS.AddScript({
+    param($S)
+    while ($S.Running) {
+        $Uptime = (Get-Date) - $S.ScriptStartTime
+        @{ collector=$S.CollectorName; timestamp=(Get-Date -Format "yyyy-MM-dd HH:mm:ss"); status="ACTIVE"; uptime="$([math]::Floor($Uptime.TotalHours))h$($Uptime.Minutes)m$($Uptime.Seconds)s"; cycle=$S.CycleCount } | ConvertTo-Json -Compress | Out-File $S.HealthFile -Encoding UTF8
+        Start-Sleep -Seconds 5
+    }
+}).AddArgument($SharedState) | Out-Null
+$HeartbeatPS.BeginInvoke() | Out-Null
 
 # --- MAIN EVENT LOOP ---
 while ($true) {
+    $CycleCount++
+    $SharedState.CycleCount = $CycleCount
     $NewEvent = Wait-Event -SourceIdentifier "HarbingerProcess" -Timeout 5
 
     if ($NewEvent) {
@@ -247,4 +274,5 @@ while ($true) {
             $LastHeartbeat = Get-Date
         }
     }
+
 }
