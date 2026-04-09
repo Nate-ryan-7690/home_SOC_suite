@@ -16,7 +16,7 @@ applies real SOC concepts — baseline collection, anomaly detection, severity
 classification, log aggregation, and cross-source correlation — to a personal
 Windows machine. The design process was adversarial from the start: each phase
 was stress-tested against a red team analysis before the next was built, with
-42 correlation rules defined from those findings driving the architecture of the
+48 correlation rules defined from those findings driving the architecture of the
 Python engine.
 
 ---
@@ -146,6 +146,12 @@ Defined through multi-round red team analysis (see Documentation). Implemented i
 | 40 | Persistent Sub-Threshold CPU Load | SUSPICIOUS | Steward + Sentinel |
 | 41 | Blind Window Exploitation | HIGH/CRITICAL | Python Engine (collector DOWN + concurrent events) |
 | 42 | Coordinated Collector Suppression | CRITICAL | Python Engine (≥2 collectors simultaneously DOWN) |
+| 43 | Unexpected Scripting Engine Spawn | SUSPICIOUS | Harbinger (known-bad parent → scripting engine) |
+| 44 | Script from High-Risk Path | HIGH | Harbinger (43 + engine binary in user-writable path) |
+| 45 | Scripting Engine Network Callback | CRITICAL | Harbinger + Sentinel (43 + outbound connection) |
+| 46 | Full Supply-Chain Execution Chain | CRITICAL | Harbinger + Sentinel (bad parent + drop + callback) |
+| 47 | Obfuscated / Encoded Execution | HIGH | Harbinger (-EncodedCommand / Hidden+Bypass combination) |
+| 48 | Known-Bad Parent-Child Pair | CRITICAL | Harbinger (specific high-confidence pairs, zero legitimate use) |
 
 ---
 
@@ -192,8 +198,8 @@ home_SOC_suite/
 │   ├── health_db.py        — Heartbeat SQLite store (collector_status, heartbeats tables)
 │   ├── config.py           — All thresholds and time windows in one place
 │   ├── test_parser.py      — Log parser test suite (7 tests)
-│   ├── test_normalizer.py  — Normaliser test suite (28 tests)
-│   └── test_correlator.py  — Correlator test suite (121 tests)
+│   ├── test_normalizer.py  — Normaliser test suite (32 tests)
+│   └── test_correlator.py  — Correlator test suite (135 tests)
 └── Documentation/      — Research documents and red team analysis
 ```
 
@@ -250,7 +256,7 @@ a red team analysis before the next layer was started.
 
 ## Key Features
 
-- **Adversarial design** — 40 correlation rules defined through multi-round red
+- **Adversarial design** — 48 correlation rules defined through multi-round red
   team analysis before the Python engine was built. Detection logic is grounded
   in real attack chains, not hypothetical scenarios
 - **Behavioral baseline collection** — all collectors build baselines over time,
@@ -294,12 +300,12 @@ including SysmonWatcher (Sysmon kernel-level events).
 `log_parser.py` → `normalizer.py` → `correlator.py` → `alert_manager.py`
 
 All ingest, normalisation, and correlation steps use batch SQLite transactions.
-156 tests across three test suites — all passing.
+174 tests across three test suites — all passing.
 
-**Rules implemented:** 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 16, 17, 18, 21, 22, 41, 42
-(Tier 1 single-event and Tier 2 windowed correlation) and Rules 28–39 (Sysmon kernel
-events via SysmonWatcher). Rules 12, 14, 15, 20 deferred to Tier 4 (require 30-day
-baseline data). Rules 23, 24, 25 blocked pending specialised collectors.
+**Rules implemented:** 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 16, 17, 18, 21, 22, 41, 42,
+43, 44, 45, 46, 47, 48 (Tier 1 single-event and Tier 2 windowed correlation) and Rules 28–39
+(Sysmon kernel events via SysmonWatcher). Rules 12, 14, 15, 20 deferred to Tier 4 (require
+30-day baseline data). Rules 23, 24, 25 blocked pending specialised collectors.
 
 **Detection model:** Hybrid — deterministic rules for clear attack chains,
 risk scoring for cumulative weak signals, visibility alerts for collector
