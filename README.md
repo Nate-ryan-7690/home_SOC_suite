@@ -7,6 +7,12 @@ Security Event Log activity, scheduled task changes, DNS queries, and power even
 — logging everything to structured files for weekly analysis and correlation
 through a Python engine.
 
+![Night's Watch SOC Dashboard — full suite running](Documentation/Screenshots/full_suite_running.png)
+
+*Single-page Flask dashboard. All 12 collectors + correlation engine active,
+live resource monitor, outbound connection feed, collector event tiles, and
+streaming engine alerts.*
+
 ---
 
 ## Background
@@ -18,6 +24,13 @@ Windows machine. The design process was adversarial from the start: each phase
 was stress-tested against a red team analysis before the next was built, with
 48 correlation rules defined from those findings driving the architecture of the
 Python engine.
+
+---
+
+## Roadmap
+
+Development is tracked in [`roadmap.md`](roadmap.md) — current state, Phase 9
+Forensic Engine plans, and longer-term hardening goals.
 
 ---
 
@@ -40,6 +53,66 @@ The shortcut starts Flask, waits for it to be ready, then opens the browser
 automatically. If Flask is already running it skips startup and opens the
 browser directly. Status dots will show grey if the shortcut is run without
 Administrator elevation.
+
+---
+
+## Dashboard Lifecycle
+
+The dashboard enforces a clean start/stop sequence so the Auditor bookends
+(morning integrity check, evening hash chain validation) always run in order.
+
+### 1. Pre-start — Suite Not Started
+
+![Dashboard before Start Day](Documentation/Screenshots/Suite_not_started.png)
+
+All collector heartbeats are red (health files missing or stopped). The
+Shutdown Dashboard button is hidden — the dashboard will not allow shutdown
+until End Day has run.
+
+### 2. Start Day — Suite Running
+
+![Suite starting up after Start Day](Documentation/Screenshots/morning_auditor_run.png)
+
+Start Day runs the morning Auditor bookend (SHA256 log verification, archive
+hash chain validation) and launches all 12 collectors plus the correlation
+engine. Heartbeats turn green as each collector reports in.
+
+### 3. End Day — Running Evening Auditor
+
+![End Day sequence in progress](Documentation/Screenshots/auditor_evening.png)
+
+End Day stops all collectors in sequence and runs the evening Auditor bookend.
+Collector dots stay green while the sequence runs; the status line shows
+*Running Auditor Evening…*
+
+### 4. Post-shutdown — Safe to Close
+
+![After End Day — Shutdown Dashboard button visible](Documentation/Screenshots/full_shutdown.png)
+
+Once the evening audit completes, all collector dots go red, the status line
+reads *Evening audit complete. Safe to shut down.*, and the **Shutdown
+Dashboard** button appears — clicking it terminates the Flask process cleanly.
+
+![Close-up of shutdown state](Documentation/Screenshots/shutdown.png)
+
+The browser tab must be closed manually (browsers do not expose a close API to
+external processes).
+
+---
+
+## Live Alerts
+
+Collector event tiles show the most recent severity-tagged events per source.
+The Engine Alerts feed streams correlated findings from the Python engine in
+real time, with rule number, confidence score, full evidence chain, and SHA256
+evidence hash.
+
+![Collector event tiles and engine alerts feed](Documentation/Screenshots/alerts.png)
+
+*Example: Rule 35 (Raw Disk Read) firing on `powershell.exe` opening a raw
+handle to `\Device\HarddiskVolume3`, and Rule 31 (DLL Load Anomaly) flagging
+Defender DLLs loading from a user-writable path. Both with full process
+provenance and file hashes.*
 
 ---
 
@@ -200,7 +273,7 @@ home_SOC_suite/
 │   ├── test_parser.py      — Log parser test suite (7 tests)
 │   ├── test_normalizer.py  — Normaliser test suite (32 tests)
 │   └── test_correlator.py  — Correlator test suite (135 tests)
-└── Documentation/      — Research documents and red team analysis
+└── Documentation/      — Research documents, red team analysis, and dashboard screenshots
 ```
 
 **Generated at runtime (not tracked in repository):**
@@ -318,6 +391,8 @@ silence and ingest quality degradation.
 | 8 | SOC Dashboard — Flask single-page live visibility | Complete |
 | 9 | Forensic Engine — post-event investigation, append-only evidence databank | Planned |
 | 9 | Forensic Dashboard — summarised findings, report generation, evidence navigation | Planned |
+
+See [`roadmap.md`](roadmap.md) for the full development timeline.
 
 ---
 
