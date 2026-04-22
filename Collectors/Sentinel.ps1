@@ -17,6 +17,22 @@ $TransferFile = "$RootPath\Config\Transfer_Baseline.json"
 $SampleCount = 0
 $ScriptStartTime = Get-Date
 
+# ============================================================
+# KNOWN SAFE PROCESSES & Trusted Zones
+# Processes outside the trusted zones that are legitimate on this machine.
+# Key: process name (no .exe, lowercase). Value: expected path prefix.
+# Add entries here when you install new software that installs to AppData.
+# ============================================================
+$TrustedZones = @(
+    "C:\Windows",
+    "C:\Program Files",
+    "C:\Program Files (x86)",
+    "$env:USERPROFILE\AppData\Local\Programs",
+    "C:\Windows\System32" # Redundant but safe
+    )
+$KnownSafeProcesses = @{}
+
+
 if (Test-Path $TransferFile) {
     $TransferTracker = Get-Content $TransferFile | ConvertFrom-Json | ForEach-Object {
         $h = @{}; $_.PSObject.Properties | ForEach-Object { $h[$_.Name] = $_.Value }; $h
@@ -37,7 +53,7 @@ if (Test-Path $LogFile) {
     $LogAge = (Get-Item $LogFile).CreationTime
     if ($LogAge -lt (Get-Date).AddDays(-7)) {
         if (-not (Test-Path $ArchiveFolder)) { New-Item -ItemType Directory -Path $ArchiveFolder }
-        $ArchiveName = "Log_Archived_$(Get-Date -Format 'yyyy-MM-dd').txt"
+        $ArchiveName = "Sentinel_Archive_$(Get-Date -Format 'yyyy-MM-dd').txt"
         Move-Item -Path $LogFile -Destination "$ArchiveFolder\$ArchiveName"
         Write-Host " [!] Old log moved to Archives folder." -ForegroundColor Yellow
     }
@@ -102,7 +118,7 @@ while($true) {
 
     # --- SECTION 2: GLOBAL TRAFFIC HUNT ---
     Write-Host "`n--- [SECTION 2: GLOBAL TRAFFIC HUNT] ---" -ForegroundColor Cyan
-    $Conns = Get-NetTCPConnection -State Established | Where-Object { $_.RemoteAddress -notlike "127.0.0.1" -and $_.RemoteAddress -notlike "192.168.*" -and $_.RemoteAddress -notlike "0.0.0.0" }
+    $Conns = Get-NetTCPConnection -State Established | Where-Object { $_.RemoteAddress -notlike "127.0.0.1" -and $_.RemoteAddress -notlike "192.168.*" -and $_.RemoteAddress -notlike "0.0.0.0" -and $_.RemoteAddress -ne "::1" -and $_.RemoteAddress -notlike "fe80::*"}
     
     foreach ($C in $Conns) {
         $R_IP = $C.RemoteAddress
@@ -146,13 +162,6 @@ while($true) {
         }
         else {
             # 3. Trusted Zone Check
-            $TrustedZones = @(
-                "C:\Windows",
-                "C:\Program Files",
-                "C:\Program Files (x86)",
-                "$env:USERPROFILE\AppData\Local\Programs",
-                "C:\Windows\System32" # Redundant but safe
-            )
             $InZone = $false
             foreach ($Zone in $TrustedZones) {
                 if ($PPath -like "$Zone*") {
@@ -163,9 +172,14 @@ while($true) {
             # 4. Environmental Violation (CRITICAL)
             if (-not $InZone) {
                 $Severity = "CRITICAL"
+		        $PNameLower = $Pname.ToLower()
+		        if ($KnownSafeProcesses.ContainsKey($PNameLower)) {
+		            if ($PPath -like "$($KnownSafeProcesses[$PNameLower])*") {
+			             $Severity = "UNKNOWN"
+		                }
+                    }
+            	}
             }
-        }
-        
         #Logs new connections olny with timestamp, Severity, App Name, Remote IP, Location, and Path. 
             if ($IsNewConnection) {
                 if ($LogWarning) {
