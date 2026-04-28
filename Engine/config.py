@@ -398,7 +398,57 @@ RULE_WEIGHTS = {
     39: 1.0,   # Process Hollowing Confirmed (EID 25)
     41: 1.0,   # Blind Window Exploitation
     42: 1.0,   # Coordinated Collector Suppression
+    43: 0.7,   # Unexpected Scripting Engine Spawn (base)
+    44: 0.8,   # Script from High-Risk Path (escalation)
+    45: 1.0,   # Scripting Engine + Network
+    46: 1.0,   # Full Supply-Chain Chain
+    47: 0.8,   # Obfuscated / Encoded Execution
+    48: 1.0,   # Known-Bad Parent-Child Pair
 }
+
+# ============================================================
+# SCRIPTING ENGINE SPAWN DETECTION — Rules 43–48
+# Known-bad list active until baseline month closes (~2026-04-27).
+# After baseline: transition to not-in-whitelist model. Document
+# observed legitimate parent-child pairs in README before switching.
+# ============================================================
+
+# Child processes that should not be spawned by unknown parents
+SCRIPTING_ENGINES = [
+    "powershell.exe", "pwsh.exe",    "cmd.exe",
+    "wscript.exe",    "cscript.exe", "mshta.exe",
+    "python.exe",     "pythonw.exe", "node.exe",
+    "bash.exe",       "wsl.exe",
+]
+
+# Rule 43: any of these parents spawning a scripting engine → SUSPICIOUS
+KNOWN_BAD_PARENTS = [
+    "chrome.exe",    "msedge.exe",   "firefox.exe",
+    "winword.exe",   "excel.exe",    "outlook.exe",  "powerpnt.exe",
+    "acrobat.exe",   "acrord32.exe",
+    "mshta.exe",     "node.exe",
+]
+
+# Rule 48: these specific parent→child pairs → CRITICAL (no escalation needed)
+# Keys and values are .exe-stripped, matched case-insensitively
+KNOWN_BAD_PAIRS = {
+    "chrome":   ["powershell", "pwsh", "wscript", "cscript", "cmd"],
+    "msedge":   ["powershell", "pwsh", "wscript", "cscript", "cmd"],
+    "firefox":  ["powershell", "pwsh", "wscript", "cscript", "cmd"],
+    "winword":  ["powershell", "pwsh", "wscript", "cscript", "cmd", "mshta"],
+    "excel":    ["powershell", "pwsh", "wscript", "cscript", "cmd", "mshta"],
+    "outlook":  ["powershell", "pwsh", "wscript", "cscript", "cmd"],
+    "powerpnt": ["powershell", "pwsh", "wscript", "cscript", "cmd", "mshta"],
+    "acrobat":  ["powershell", "pwsh", "cmd"],
+    "acrord32": ["powershell", "pwsh", "cmd"],
+    "node":     ["wscript", "cscript"],
+    "mshta":    ["powershell", "pwsh", "cmd"],
+}
+
+# Suite launcher exclusion — python.exe spawning pwsh.exe with this
+# path fragment in CMD is the legitimate dashboard collector launcher.
+# Rules 43 and 47 skip any event whose CMD field contains this string.
+SUITE_LAUNCHER_CMD_FRAGMENT = r"\soc\scripts"
 
 # ============================================================
 # SYSTEM

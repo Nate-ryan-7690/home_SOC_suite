@@ -672,6 +672,9 @@ def _rule_7(reference_time=None):
     Sources: Harbinger (event_type=PROCESS) + Sentinel (event_type=NETWORK)
     Window:  SHORT_WINDOW (10 min)
     Weight:  config.RULE_WEIGHTS[7]
+    Note:    Events where process_path is null are excluded — wrong-path evidence
+             is required to confirm hollowing. Null path = WMI PID race; we cannot
+             distinguish a legitimate svchost from a hollowed one without the path.
     """
     process_events = db.get_events_in_window(
         config.SHORT_WINDOW, event_type='PROCESS', reference_time=reference_time
@@ -679,6 +682,7 @@ def _rule_7(reference_time=None):
     hollow_procs = [
         e for e in process_events
         if e['trust_level'] != 'TRUSTED'
+        and e['process_path']          # null guard — no path = no wrong-path evidence
         and _actor_matches(e['actor'], e['process_path'], _HOLLOWING_SET)
     ]
     if not hollow_procs:
@@ -2254,14 +2258,19 @@ def _rule_38(event):
 
 
 def _rule_39(event):
-    """Rule 39 — Process Hollowing Confirmed  (CRITICAL)
-    Sysmon EID 25 (ProcessTampering) detected process image tampering — the running
-    process memory no longer matches the binary on disk. This is the kernel-level
-    confirmation of process hollowing: a legitimate binary is started, its memory
-    image is unmapped and replaced with a malicious payload. The process appears
-    legitimate in task managers but executes attacker code.
-    Requires Sysmon 13+. One of the highest-confidence injection detections
-    available without a kernel driver.
+    """Rule 39 — Process Hollowing / Image Tamper  (CRITICAL → SUSPICIOUS)
+    Sysmon EID 25 (ProcessTampering) detected process image tampering.
+
+    Severity is passed through from SysmonWatcher's TamperType assessment:
+      CRITICAL  — 'Image is replaced': PE body swapped in memory. Kernel-level
+                  confirmation of process hollowing or herpaderping. The running
+                  process executes attacker code while appearing legitimate.
+                  Requires Sysmon 13+. Highest-confidence injection signal
+                  available without a kernel driver.
+      SUSPICIOUS — 'Image is locked': image file in use during execution.
+                  Common false positive for POSIX-emulation runtimes (Git Bash,
+                  WSL utilities). Still logged for correlator context.
+
     Source: SysmonWatcher (event_type=PROCESS, subtype=PROCESS_TAMPER)
     """
     if event['event_type'] != 'PROCESS':
@@ -2270,6 +2279,29 @@ def _rule_39(event):
         return
     weight   = config.RULE_WEIGHTS[39]
     alert_id = _make_alert_id(39, event['event_id'])
+    # Pass through collector severity -- SysmonWatcher already distinguished
+    # "Image is replaced" (CRITICAL) from "Image is locked" (SUSPICIOUS).
+    severity = event['base_severity'] if event['base_severity'] in ('CRITICAL', 'SUSPICIOUS') else 'CRITICAL'
+    if severity == 'CRITICAL':
+        explanation = (
+            f"[Rule 39] Process Hollowing Confirmed. "
+            f"Sysmon EID 25 detected process image replacement for "
+            f"'{event['actor'] or 'unknown'}' ({event['process_path'] or 'path not recorded'}). "
+            f"Running process memory no longer matches the binary on disk — kernel-level "
+            f"signature of process hollowing. A legitimate binary is started and its memory "
+            f"replaced with a malicious payload. Immediate triage required. "
+            f"Confidence: {weight:.0%}. Evidence: {event['event_id']}."
+        )
+    else:
+        explanation = (
+            f"[Rule 39] Process Image Locked (EID 25). "
+            f"Sysmon EID 25 detected an image-locked state for "
+            f"'{event['actor'] or 'unknown'}' ({event['process_path'] or 'path not recorded'}). "
+            f"The image file was in use during execution — common for POSIX-emulation runtimes "
+            f"(Git Bash, WSL utilities) but also possible with some injection techniques. "
+            f"Review TamperType in the raw SysmonWatcher log for the specific type. "
+            f"Confidence: {weight:.0%}. Evidence: {event['event_id']}."
+        )
     db.insert_detection({
         'rule_id': 39, 'window_type': 'single',
         'matched_entities': [event['event_id']],
@@ -2281,16 +2313,8 @@ def _rule_39(event):
     })
     db.insert_alert({
         'alert_id': alert_id, 'rule_id': 39,
-        'severity_current': 'CRITICAL', 'confidence': weight, 'status': 'NEW',
-        'explanation': (
-            f"[Rule 39] Process Hollowing Confirmed. "
-            f"Sysmon EID 25 detected process image tampering for "
-            f"'{event['actor'] or 'unknown'}' ({event['process_path'] or 'path not recorded'}). "
-            f"Running process memory no longer matches the binary on disk — kernel-level "
-            f"signature of process hollowing. A legitimate binary is started and its memory "
-            f"replaced with a malicious payload. Immediate triage required. "
-            f"Confidence: {weight:.0%}. Evidence: {event['event_id']}."
-        ),
+        'severity_current': severity, 'confidence': weight, 'status': 'NEW',
+        'explanation': explanation,
         'linked_case': None,
     })
 
@@ -2552,13 +2576,441 @@ def _rule_42(reference_time=None):
     })
 
 
+# ============================================================
+# RULE 43 — Unexpected Scripting Engine Spawn  (SUSPICIOUS)
+# ============================================================
+
+def _rule_43(reference_time=None):
+    """Rule 43 — Unexpected Scripting Engine Spawn  (SUSPICIOUS)
+
+    A known-bad parent process (browser, Office app, package manager, PDF reader)
+    spawned a scripting engine (PowerShell, cmd, wscript, node, python, etc.).
+    Legitimate software does not spawn interactive shells from these parents.
+
+    Known-bad list active until baseline month closes (~2026-04-27).
+    Suite launcher exclusion: python.exe -> pwsh.exe for SOC Scripts path is exempt.
+
+    Sources: Harbinger (parent-child via raw_payload JOIN)
+    Window:  SHORT_WINDOW (10 min)
+    Weight:  config.RULE_WEIGHTS[43]
+    """
+    spawn_events = db.get_harbinger_scripting_spawn_bad_parent(
+        config.KNOWN_BAD_PARENTS,
+        config.SCRIPTING_ENGINES,
+        config.SHORT_WINDOW,
+        exclude_cmd_fragment=config.SUITE_LAUNCHER_CMD_FRAGMENT,
+        reference_time=reference_time,
+    )
+    if not spawn_events:
+        return
+
+    weight = config.RULE_WEIGHTS[43]
+
+    for evt in spawn_events:
+        alert_id = _make_alert_id(43, evt['event_id'])
+        db.insert_detection({
+            'rule_id':          43,
+            'window_type':      'short',
+            'matched_entities': [evt['event_id']],
+            'score_factors': {
+                'actor':         evt['actor'],
+                'process_path':  evt['process_path'],
+                'base_severity': evt['base_severity'],
+            },
+            'confidence':    weight,
+            'evidence_refs': [evt['event_id']],
+        })
+        db.insert_alert({
+            'alert_id':         alert_id,
+            'rule_id':          43,
+            'severity_current': 'SUSPICIOUS',
+            'confidence':       weight,
+            'status':           'NEW',
+            'explanation': (
+                f"[Rule 43] Unexpected scripting engine spawn. "
+                f"'{evt['actor'] or 'unknown'}' was spawned by a known-bad parent process "
+                f"at {evt['observed_at']}. "
+                f"Browsers, Office applications, package managers, and PDF readers have no "
+                f"legitimate reason to spawn interactive shells. This pattern is consistent "
+                f"with supply-chain attacks (malicious npm postinstall hooks), macro execution "
+                f"(Office VBA), and drive-by exploitation (browser -> shell). "
+                f"Path: {evt['process_path'] or 'unknown'}. "
+                f"Confidence: {weight:.0%}. Evidence: {evt['event_id']}."
+            ),
+            'linked_case': None,
+        })
+
+
+# ============================================================
+# RULE 44 — Script from High-Risk Path  (HIGH)
+# ============================================================
+
+def _rule_44(reference_time=None):
+    """Rule 44 — Script from High-Risk Path  (HIGH)
+
+    Escalation of Rule 43: the spawned scripting engine binary is running
+    from a high-risk path (Temp, Downloads, AppData\\Roaming, ProgramData, Public).
+    A legitimate script engine binary should always live in System32 or Program Files.
+    Finding one in a user-writable path means it was dropped there — this is the
+    dropper stage of a supply-chain or staged execution attack.
+
+    Sources: Harbinger (parent-child JOIN + trust_level)
+    Window:  SHORT_WINDOW (10 min)
+    Weight:  config.RULE_WEIGHTS[44]
+    """
+    spawn_events = db.get_harbinger_scripting_spawn_bad_parent(
+        config.KNOWN_BAD_PARENTS,
+        config.SCRIPTING_ENGINES,
+        config.SHORT_WINDOW,
+        exclude_cmd_fragment=config.SUITE_LAUNCHER_CMD_FRAGMENT,
+        reference_time=reference_time,
+    )
+    high_risk = [e for e in spawn_events if e['trust_level'] == 'HIGH_RISK']
+    if not high_risk:
+        return
+
+    weight = config.RULE_WEIGHTS[44]
+
+    for evt in high_risk:
+        alert_id = _make_alert_id(44, evt['event_id'])
+        db.insert_detection({
+            'rule_id':          44,
+            'window_type':      'short',
+            'matched_entities': [evt['event_id']],
+            'score_factors': {
+                'actor':        evt['actor'],
+                'process_path': evt['process_path'],
+                'trust_level':  evt['trust_level'],
+            },
+            'confidence':    weight,
+            'evidence_refs': [evt['event_id']],
+        })
+        db.insert_alert({
+            'alert_id':         alert_id,
+            'rule_id':          44,
+            'severity_current': 'HIGH',
+            'confidence':       weight,
+            'status':           'NEW',
+            'explanation': (
+                f"[Rule 44] Scripting engine running from high-risk path. "
+                f"'{evt['actor'] or 'unknown'}' was spawned by a known-bad parent AND is "
+                f"executing from a user-writable high-risk path: "
+                f"'{evt['process_path'] or 'unknown'}' at {evt['observed_at']}. "
+                f"Legitimate interpreter binaries live in System32 or Program Files. "
+                f"A scripting engine in Temp, Downloads, AppData, or ProgramData was dropped "
+                f"there — this is the binary-drop stage of a staged execution attack. "
+                f"Confidence: {weight:.0%}. Evidence: {evt['event_id']}."
+            ),
+            'linked_case': None,
+        })
+
+
+# ============================================================
+# RULE 45 — Scripting Engine + Network  (CRITICAL)
+# ============================================================
+
+def _rule_45(reference_time=None):
+    """Rule 45 — Scripting Engine Network Callback  (CRITICAL)
+
+    Escalation of Rule 43: the scripting engine spawned by a known-bad parent
+    makes an outbound network connection within SHORT_WINDOW. This is the
+    callback stage — the dropped script is phoning home to C2 infrastructure.
+    Matches the axios attack chain: npm -> node -> powershell -> C2.
+
+    Sources: Harbinger (spawn) + Sentinel (outbound), SHORT_WINDOW
+    Weight:  config.RULE_WEIGHTS[45]
+    """
+    spawn_events = db.get_harbinger_scripting_spawn_bad_parent(
+        config.KNOWN_BAD_PARENTS,
+        config.SCRIPTING_ENGINES,
+        config.SHORT_WINDOW,
+        exclude_cmd_fragment=config.SUITE_LAUNCHER_CMD_FRAGMENT,
+        reference_time=reference_time,
+    )
+    if not spawn_events:
+        return
+
+    net_events = db.get_events_in_window(
+        config.SHORT_WINDOW, event_type='NETWORK', reference_time=reference_time
+    )
+    outbound = [e for e in net_events if e['subtype'] == 'OUTBOUND']
+    if not outbound:
+        return
+
+    weight = config.RULE_WEIGHTS[45]
+
+    for proc_evt in spawn_events:
+        matched_net = [
+            n for n in outbound if _actors_match(proc_evt['actor'], n['actor'])
+        ]
+        if not matched_net:
+            continue
+
+        alert_id     = _make_alert_id(45, proc_evt['event_id'],
+                                      *[n['event_id'] for n in matched_net])
+        destinations = sorted({n['destination'] for n in matched_net if n['destination']})
+
+        db.insert_detection({
+            'rule_id':          45,
+            'window_type':      'short',
+            'matched_entities': [proc_evt['event_id']] + [n['event_id'] for n in matched_net],
+            'score_factors': {
+                'actor':        proc_evt['actor'],
+                'destinations': destinations[:3],
+                'net_count':    len(matched_net),
+            },
+            'confidence':    weight,
+            'evidence_refs': [proc_evt['event_id']] + [n['event_id'] for n in matched_net],
+        })
+        db.insert_alert({
+            'alert_id':         alert_id,
+            'rule_id':          45,
+            'severity_current': 'CRITICAL',
+            'confidence':       weight,
+            'status':           'NEW',
+            'explanation': (
+                f"[Rule 45] Scripting engine network callback after suspicious spawn. "
+                f"'{proc_evt['actor'] or 'unknown'}' was spawned by a known-bad parent "
+                f"at {proc_evt['observed_at']} and made {len(matched_net)} outbound "
+                f"connection(s) within {config.SHORT_WINDOW // 60} minutes. "
+                f"Destinations: {_summarise(destinations) if destinations else 'unknown'}. "
+                f"This sequence — bad parent -> shell -> outbound — is the callback stage of "
+                f"a supply-chain attack, RAT installer, or PowerShell downloader. "
+                f"Confidence: {weight:.0%}. Evidence: {proc_evt['event_id']}."
+            ),
+            'linked_case': None,
+        })
+
+
+# ============================================================
+# RULE 46 — Full Supply-Chain Execution Chain  (CRITICAL)
+# ============================================================
+
+def _rule_46(reference_time=None):
+    """Rule 46 — Full Supply-Chain Execution Chain  (CRITICAL)
+
+    Full four-stage chain within SHORT_WINDOW:
+      known-bad parent -> scripting engine -> high-risk path -> outbound network.
+    All four elements present simultaneously = highest confidence supply-chain
+    or staged execution detection. Rule 45 fires on parent+script+network.
+    Rule 46 additionally requires the high-risk path component — confirming
+    the binary was dropped into a user-writable location before calling out.
+
+    Sources: Harbinger + Sentinel, SHORT_WINDOW
+    Weight:  config.RULE_WEIGHTS[46]
+    """
+    spawn_events = db.get_harbinger_scripting_spawn_bad_parent(
+        config.KNOWN_BAD_PARENTS,
+        config.SCRIPTING_ENGINES,
+        config.SHORT_WINDOW,
+        exclude_cmd_fragment=config.SUITE_LAUNCHER_CMD_FRAGMENT,
+        reference_time=reference_time,
+    )
+    high_risk_spawns = [e for e in spawn_events if e['trust_level'] == 'HIGH_RISK']
+    if not high_risk_spawns:
+        return
+
+    net_events = db.get_events_in_window(
+        config.SHORT_WINDOW, event_type='NETWORK', reference_time=reference_time
+    )
+    outbound = [e for e in net_events if e['subtype'] == 'OUTBOUND']
+    if not outbound:
+        return
+
+    weight = config.RULE_WEIGHTS[46]
+
+    for proc_evt in high_risk_spawns:
+        matched_net = [
+            n for n in outbound if _actors_match(proc_evt['actor'], n['actor'])
+        ]
+        if not matched_net:
+            continue
+
+        alert_id     = _make_alert_id(46, proc_evt['event_id'],
+                                      *[n['event_id'] for n in matched_net])
+        destinations = sorted({n['destination'] for n in matched_net if n['destination']})
+
+        db.insert_detection({
+            'rule_id':          46,
+            'window_type':      'short',
+            'matched_entities': [proc_evt['event_id']] + [n['event_id'] for n in matched_net],
+            'score_factors': {
+                'actor':        proc_evt['actor'],
+                'process_path': proc_evt['process_path'],
+                'trust_level':  proc_evt['trust_level'],
+                'destinations': destinations[:3],
+                'net_count':    len(matched_net),
+            },
+            'confidence':    weight,
+            'evidence_refs': [proc_evt['event_id']] + [n['event_id'] for n in matched_net],
+        })
+        db.insert_alert({
+            'alert_id':         alert_id,
+            'rule_id':          46,
+            'severity_current': 'CRITICAL',
+            'confidence':       weight,
+            'status':           'NEW',
+            'explanation': (
+                f"[Rule 46] Full supply-chain execution chain detected. "
+                f"Four-stage sequence within {config.SHORT_WINDOW // 60} minutes: "
+                f"(1) known-bad parent spawned scripting engine "
+                f"'{proc_evt['actor'] or 'unknown'}' at {proc_evt['observed_at']}, "
+                f"(2) engine binary in high-risk path '{proc_evt['process_path'] or 'unknown'}' "
+                f"— binary was dropped, not installed, "
+                f"(3) {len(matched_net)} outbound connection(s) to "
+                f"{_summarise(destinations) if destinations else 'unknown'}. "
+                f"This is the complete supply-chain execution pattern: "
+                f"deliver -> drop -> execute -> callback. "
+                f"Confidence: {weight:.0%}. Evidence: {proc_evt['event_id']}."
+            ),
+            'linked_case': None,
+        })
+
+
+# ============================================================
+# RULE 47 — Obfuscated / Encoded Execution  (HIGH)
+# ============================================================
+
+def _rule_47(reference_time=None):
+    """Rule 47 — Obfuscated or Encoded Execution  (HIGH)
+
+    A scripting engine was launched with command-line flags that indicate
+    deliberate obfuscation or hidden execution:
+      - -EncodedCommand (or -enc): Base64-encoded payload
+      - -WindowStyle Hidden + -ExecutionPolicy Bypass together
+      - -WindowStyle Hidden + -NonInteractive + -NoProfile together
+
+    -ExecutionPolicy Bypass alone is NOT sufficient — the suite launcher uses it
+    legitimately. The combination with Hidden/NonInteractive is the red flag.
+
+    Suite launcher exclusion: python -> pwsh with Desktop\\SOC\\Scripts\\ in CMD is exempt.
+
+    Sources: Harbinger (CMD field via raw_payload JOIN)
+    Window:  SHORT_WINDOW (10 min)
+    Weight:  config.RULE_WEIGHTS[47]
+    """
+    obfuscated = db.get_harbinger_obfuscated_cmd(
+        config.SHORT_WINDOW,
+        exclude_cmd_fragment=config.SUITE_LAUNCHER_CMD_FRAGMENT,
+        reference_time=reference_time,
+    )
+    if not obfuscated:
+        return
+
+    weight = config.RULE_WEIGHTS[47]
+
+    for evt in obfuscated:
+        alert_id = _make_alert_id(47, evt['event_id'])
+        db.insert_detection({
+            'rule_id':          47,
+            'window_type':      'short',
+            'matched_entities': [evt['event_id']],
+            'score_factors': {
+                'actor':         evt['actor'],
+                'process_path':  evt['process_path'],
+                'base_severity': evt['base_severity'],
+            },
+            'confidence':    weight,
+            'evidence_refs': [evt['event_id']],
+        })
+        db.insert_alert({
+            'alert_id':         alert_id,
+            'rule_id':          47,
+            'severity_current': 'HIGH',
+            'confidence':       weight,
+            'status':           'NEW',
+            'explanation': (
+                f"[Rule 47] Obfuscated or encoded script execution. "
+                f"'{evt['actor'] or 'unknown'}' was launched with command-line flags "
+                f"indicating hidden or encoded execution at {evt['observed_at']}. "
+                f"Triggers: -EncodedCommand (Base64 payload), or -WindowStyle Hidden "
+                f"combined with -ExecutionPolicy Bypass or -NonInteractive/-NoProfile. "
+                f"-ExecutionPolicy Bypass alone is excluded — the combination is the signal. "
+                f"Legitimate administrative scripts do not need hidden windows and encoded "
+                f"payloads simultaneously. "
+                f"Path: {evt['process_path'] or 'unknown'}. "
+                f"Confidence: {weight:.0%}. Evidence: {evt['event_id']}."
+            ),
+            'linked_case': None,
+        })
+
+
+# ============================================================
+# RULE 48 — Known-Bad Parent-Child Pair  (CRITICAL)
+# ============================================================
+
+def _rule_48(reference_time=None):
+    """Rule 48 — Known-Bad Parent-Child Pair  (CRITICAL)
+
+    A specific high-confidence parent-child combination was observed where
+    the parent has no legitimate reason to ever spawn that child process.
+    Unlike Rule 43 (any scripting engine from a bad parent = SUSPICIOUS),
+    these pairs are CRITICAL immediately — the combination is definitively
+    anomalous with near-zero legitimate use cases on a home machine.
+
+    Examples: browser -> PowerShell, Excel -> wscript, node -> cscript.
+    Each pair in config.KNOWN_BAD_PAIRS is independently verified as
+    having no normal-use justification.
+
+    Sources: Harbinger (parent-child via raw_payload JOIN)
+    Window:  SHORT_WINDOW (10 min)
+    Weight:  config.RULE_WEIGHTS[48]
+    """
+    _now   = reference_time or datetime.now()
+    weight = config.RULE_WEIGHTS[48]
+
+    for parent, children in config.KNOWN_BAD_PAIRS.items():
+        spawn_events = db.get_harbinger_scripting_spawn_bad_parent(
+            [parent],
+            [f"{c}.exe" for c in children],
+            config.SHORT_WINDOW,
+            exclude_cmd_fragment=config.SUITE_LAUNCHER_CMD_FRAGMENT,
+            reference_time=_now,
+        )
+        for evt in spawn_events:
+            alert_id = _make_alert_id(48, evt['event_id'])
+            db.insert_detection({
+                'rule_id':          48,
+                'window_type':      'short',
+                'matched_entities': [evt['event_id']],
+                'score_factors': {
+                    'parent':        parent,
+                    'child':         evt['actor'],
+                    'process_path':  evt['process_path'],
+                    'base_severity': evt['base_severity'],
+                },
+                'confidence':    weight,
+                'evidence_refs': [evt['event_id']],
+            })
+            db.insert_alert({
+                'alert_id':         alert_id,
+                'rule_id':          48,
+                'severity_current': 'CRITICAL',
+                'confidence':       weight,
+                'status':           'NEW',
+                'explanation': (
+                    f"[Rule 48] Known-bad parent-child process pair. "
+                    f"'{parent}' spawned '{evt['actor'] or 'unknown'}' at {evt['observed_at']}. "
+                    f"This specific combination has no legitimate use case on a home machine. "
+                    f"Browser -> shell indicates browser exploit or malicious extension execution. "
+                    f"Office -> shell indicates VBA macro execution (phishing document). "
+                    f"node -> cscript/wscript indicates malicious npm postinstall hook "
+                    f"(supply-chain attack pattern — see axios/UNC1069 TTPs). "
+                    f"Path: {evt['process_path'] or 'unknown'}. "
+                    f"Confidence: {weight:.0%}. Evidence: {evt['event_id']}."
+                ),
+                'linked_case': None,
+            })
+
+
 _TIER_1_RULES = [_rule_6, _rule_21, _rule_8, _rule_19, _rule_10,
                  _rule_28, _rule_29, _rule_30, _rule_31, _rule_32,
                  _rule_33, _rule_34, _rule_35, _rule_36, _rule_37,
                  _rule_38, _rule_39]
 _TIER_2_RULES = [_rule_3, _rule_4, _rule_13, _rule_9, _rule_7, _rule_16,
                  _rule_2, _rule_11, _rule_1, _rule_5, _rule_22, _rule_18, _rule_17,
-                 _rule_41, _rule_42]
+                 _rule_41, _rule_42,
+                 _rule_43, _rule_44, _rule_45, _rule_46, _rule_47, _rule_48]
 
 # _TIER_3_RULES = []   # Operational   — populated after baseline month
 # _TIER_4_RULES = []   # Campaign      — populated after baseline month

@@ -24,6 +24,7 @@ $ArchiveFolder = "$RootPath\Logs\Archives"
 $HealthFile    = "$RootPath\Config\SysmonWatcher_Health.json"
 
 $PollInterval  = 30   # seconds between Sysmon log polls
+$MaxLogSizeMB  = 50   # rotate if log exceeds this size regardless of age
 
 # High-risk launch paths -- Rule 29 (also gates EID 7 user-path classification)
 $HighRiskPaths = @(
@@ -56,7 +57,10 @@ $BrowserMonitorWhitelist = @(
     'ms-teams.exe',      # Microsoft Teams -- browser SSO / deep link integration
     'GamingServices.exe',# Xbox Gaming Services -- web-integrated features
     'pwsh.exe',          # PowerShell 7 -- SysmonWatcher host process
-    'Discord.exe'        # Discord -- browser PID detection for Open Link feature
+    'Discord.exe',       # Discord -- browser PID detection for Open Link feature
+    'csrss.exe',         # Client Server Runtime -- session/window management
+    'Sysmon.exe',        # Sysmon 32-bit -- process monitoring reads
+    'Sysmon64.exe'       # Sysmon 64-bit -- process monitoring reads
 )
 
 # Event ID 10 -- Processes that legitimately open a handle to lsass.exe for
@@ -108,7 +112,35 @@ $RawDiskReadWhitelist = @(
     'OverwolfUpdater.exe',    # Overwolf gaming overlay updater (Program Files x86)
     'MoUsoCoreWorker.exe',    # Windows Update Orchestrator core worker
     'MpCmdRun.exe',           # Windows Defender CLI -- signature updates and scans (ProgramData)
-    'claude.exe'              # Claude Code AI assistant -- file indexing operations (AppData\Roaming)
+    'claude.exe',             # Claude Code AI assistant -- file indexing operations (AppData\Roaming)
+    # Windows components -- confirmed EID9 false positive sources
+    'Notepad.exe',            # Windows Notepad (WindowsApps build) -- UWP app storage access
+    'ScheduleEventAction.exe',# Task Scheduler helper -- action execution context
+    'TiWorker.exe',           # Windows Update Trusted Installer worker
+    'MsMpEng.exe',            # Windows Defender engine -- signature/quarantine store access
+    # Microsoft Edge
+    'msedge.exe',             # Microsoft Edge -- disk cache mmap (same pattern as chrome.exe)
+    # Git Bash POSIX utilities (C:\Program Files\Git\usr\bin\)
+    'grep.exe',               # Git Bash grep -- text search operations
+    'head.exe',               # Git Bash head -- file inspection
+    'ls.exe',                 # Git Bash ls -- directory listing
+    'where.exe',              # Git Bash where -- path lookup
+    # Validated additions 2026-04-23
+    'AdobeARM.exe',           # Adobe update monitor (Program Files x86)
+    'wsqmcons.exe',           # Windows SQM Consolidator (System32)
+    'msedgewebview2.exe',     # Microsoft Edge WebView2 -- disk cache mmap
+    'sc.exe',                 # Service Control Manager (System32)
+    'pwsh.exe'                # PowerShell 7 UWP build (WindowsApps)
+)
+
+# Event ID 9 -- Path-anchored whitelist for vendor suites whose add-in
+# processes are too numerous or unstable to list by name.
+# A process whose full image path starts with any of these prefixes is
+# treated identically to a named entry in $RawDiskReadWhitelist.
+# WARNING: keep these narrow (vendor-specific subdirs, not all of Program Files).
+$RawDiskReadPathWhitelist = @(
+    'C:\Program Files (x86)\Lenovo\',   # Lenovo Vantage add-ins (13+ named processes)
+    'C:\Program Files\Lenovo\'          # Lenovo 64-bit tools
 )
 
 # Event ID 1 -- Processes that legitimately launch from high-risk paths.
@@ -118,6 +150,15 @@ $TrustedHighRiskProcesses = @(
     'MpCmdRun.exe',    # Windows Defender CLI -- runs from ProgramData\Microsoft\Windows Defender
     'MsMpEng.exe',     # Windows Defender engine
     'claude.exe'       # Claude Code -- installs to AppData\Roaming\Claude
+)
+
+# Event ID 7 -- DLL path substrings within $HighRiskPaths that are system-managed.
+# Signed DLLs from these paths are suppressed to OK (routine Defender activity).
+# If a DLL from one of these paths is UNSIGNED, it still fires CRITICAL -- a
+# hijack of a trusted system directory is higher-severity than a random user path.
+$TrustedUserPathDlls = @(
+    '\Windows Defender\',
+    '\Windows Defender Advanced Threat Protection\'
 )
 
 # ============================================================
@@ -170,8 +211,10 @@ function Get-FileName($FullPath) {
 # LOG ROTATION
 # ============================================================
 if (Test-Path $LogFile) {
-    $LogAge = (Get-Item $LogFile).CreationTime
-    if ($LogAge -lt (Get-Date).AddDays(-7)) {
+    $LogItem    = Get-Item $LogFile
+    $LogAgeDays = ((Get-Date) - $LogItem.CreationTime).TotalDays
+    $LogSizeMB  = $LogItem.Length / 1MB
+    if ($LogAgeDays -gt 7 -or $LogSizeMB -gt $MaxLogSizeMB) {
         if (-not (Test-Path $ArchiveFolder)) {
             New-Item -ItemType Directory -Path $ArchiveFolder | Out-Null
         }
@@ -403,15 +446,25 @@ while ($true) {
                     $ProcName    = Get-FileName $Image
                     $DllName     = Get-FileName $ImageLoaded
 
-                    $IsSMA       = ($ImageLoaded -like "*System.Management.Automation*")
-                    $IsPwsh      = ($Image -like "*\powershell.exe" -or $Image -like "*\pwsh.exe")
-                    $IsUserPath  = Test-IsHighRiskPath $ImageLoaded
-                    $IsScriptDll = ($DllName -in @("vbscript.dll","jscript.dll","jscript9.dll","scrrun.dll","wshom.ocx"))
+                    $IsSMA            = ($ImageLoaded -like "*System.Management.Automation*")
+                    $IsPwsh           = ($Image -like "*\powershell.exe" -or $Image -like "*\pwsh.exe")
+                    $IsUserPath       = Test-IsHighRiskPath $ImageLoaded
+                    $IsScriptDll      = ($DllName -in @("vbscript.dll","jscript.dll","jscript9.dll","scrrun.dll","wshom.ocx"))
+                    $IsTrustedSubpath = ($TrustedUserPathDlls | Where-Object { $ImageLoaded -like "*$_*" }).Count -gt 0
 
                     if ($IsSMA -and -not $IsPwsh) {
                         # SMA.dll outside PowerShell = unmanaged PS host (BYOI / living-off-the-land)
                         $Severity = "CRITICAL"
                         $Message  = "SYSMON_EID7_UNMANAGED_PWSH: Process=$ProcName | DLL=System.Management.Automation.dll | Signed=$Signed | Hashes=$Hashes | ProcessPath=$Image"
+                    } elseif ($IsUserPath -and $IsTrustedSubpath -and $Signed -eq "true") {
+                        # Signed DLL from known system subpath within ProgramData (Defender etc.) -- routine
+                        $Severity = "OK"
+                        $Message  = "SYSMON_EID7_IMAGE_LOAD: Process=$ProcName | DLL=$DllName | Signed=$Signed | Hashes=$Hashes"
+                    } elseif ($IsUserPath -and $IsTrustedSubpath -and $Signed -eq "false") {
+                        # UNSIGNED DLL from a supposed-trusted system path -- potential hijack of Defender directory
+                        # Reuses DLL_HIJACK subtype so Rule 31 fires. Note field distinguishes this case.
+                        $Severity = "CRITICAL"
+                        $Message  = "SYSMON_EID7_DLL_HIJACK: Process=$ProcName | DLL=$DllName | Path=$ImageLoaded | Signed=$Signed | Note=UNSIGNED_DLL_IN_TRUSTED_SYSTEM_PATH | Hashes=$Hashes"
                     } elseif ($IsUserPath -and $Signed -eq "false") {
                         # Unsigned DLL from user-writable path
                         $Severity = "CRITICAL"
@@ -457,6 +510,10 @@ while ($true) {
                     $User       = Get-SysmonField $EvtData "User"
                     $ProcName   = Get-FileName $Image
                     $IsRawWhitelisted = ($RawDiskReadWhitelist | Where-Object { $ProcName -eq $_ }).Count -gt 0
+                    # Path whitelist: covers vendor suites with many named add-ins (Lenovo Vantage etc.)
+                    if (-not $IsRawWhitelisted -and $Image) {
+                        $IsRawWhitelisted = ($RawDiskReadPathWhitelist | Where-Object { $Image -like "$_*" }).Count -gt 0
+                    }
 
                     if ($IsRawWhitelisted) {
                         # Known-good process -- log silently for audit trail
@@ -488,6 +545,22 @@ while ($true) {
                     $IsDebugWhitelisted = ($BrowserDebuggerWhitelist | Where-Object { $SrcImage -like "*\$_" }).Count -gt 0
                     $IsBrowserMonitor   = ($BrowserMonitorWhitelist  | Where-Object { $SrcName -eq $_ }).Count -gt 0
                     $IsLsassMonitor     = ($LsassMonitorWhitelist    | Where-Object { $SrcName -eq $_ }).Count -gt 0
+                    # Chrome's multi-process sandbox uses PROCESS_ALL_ACCESS on its own children.
+                    # Path-anchored: both source and target must be from Chrome's install directory.
+                    # Name-only whitelist would suppress a compromised chrome.exe injecting into Chrome.
+                    $IsChromeSelf = (
+                        ($SrcImage -like "*\Google\Chrome\*\chrome.exe") -and
+                        ($TgtImage -like "*\Google\Chrome\*\chrome.exe")
+                    )
+                    # Windows system processes (csrss, svchost, Sysmon, etc.) legitimately open
+                    # browser handles with PROCESS_ALL_ACCESS for process lifecycle management,
+                    # session control, and kernel monitoring. Two-factor: name must be in
+                    # $BrowserMonitorWhitelist AND path must be under C:\Windows\.
+                    # An attacker cannot spoof both factors without admin + writing to System32.
+                    $IsWindowsSystemMonitor = (
+                        $IsBrowserMonitor -and
+                        ($SrcImage -like "C:\Windows\*" -or $SrcImage -like "C:\WINDOWS\*")
+                    )
 
                     # Parse access mask for bit-level threat classification.
                     # Browser dangerous: 0x002A = CREATE_THREAD | VM_OPERATION | VM_WRITE
@@ -510,18 +583,28 @@ while ($true) {
                         # Unknown process, non-dangerous access -- log for correlator
                         $Severity = "UNKNOWN"
                         $Message  = "SYSMON_EID10_LSASS_READ_ACCESS: Source=$SrcName | Target=lsass.exe | Access=$Access | SourcePath=$SrcImage"
+                    } elseif ($IsBrowser -and $IsChromeSelf) {
+                        # Chrome sandbox/GPU process management -- path-anchored self-access
+                        $Severity = "OK"
+                        $Message  = "SYSMON_EID10_BROWSER_MONITOR: Source=$SrcName | Target=$TgtName | Access=$Access"
+                    } elseif ($IsBrowser -and $IsWindowsSystemMonitor) {
+                        # Trusted Windows system process (path-anchored + whitelist) -- allowed
+                        # regardless of access flags. csrss, svchost, Sysmon use PROCESS_ALL_ACCESS
+                        # for legitimate process management and cannot be distinguished by mask alone.
+                        $Severity = "OK"
+                        $Message  = "SYSMON_EID10_BROWSER_MONITOR: Source=$SrcName | Target=$TgtName | Access=$Access"
+                    } elseif ($IsBrowser -and $IsBrowserDangerous -and -not $IsDebugWhitelisted) {
+                        # Unknown/non-system process with write/inject capability -- true threat (Rule 28)
+                        $Severity = "CRITICAL"
+                        $Message  = "SYSMON_EID10_BROWSER_DEBUGGER: Source=$SrcName | Target=$TgtName | Access=$Access | SourcePath=$SrcImage"
                     } elseif ($IsBrowser -and $IsDebugWhitelisted) {
-                        # Known legitimate dev tool (VS Code, WinDbg, etc.)
+                        # Known legitimate dev tool (VS Code, WinDbg) -- path-anchored match
                         $Severity = "OK"
                         $Message  = "SYSMON_EID10_BROWSER_DEBUG_WHITELISTED: Source=$SrcName | Target=$TgtName | Access=$Access"
                     } elseif ($IsBrowser -and $IsBrowserMonitor) {
-                        # Known system/app process doing read-only browser monitoring
+                        # Known process with non-dangerous browser handle (non-Windows path)
                         $Severity = "OK"
                         $Message  = "SYSMON_EID10_BROWSER_MONITOR: Source=$SrcName | Target=$TgtName | Access=$Access"
-                    } elseif ($IsBrowser -and $IsBrowserDangerous) {
-                        # Unknown process with write/inject capability -- true threat (Rule 28)
-                        $Severity = "CRITICAL"
-                        $Message  = "SYSMON_EID10_BROWSER_DEBUGGER: Source=$SrcName | Target=$TgtName | Access=$Access | SourcePath=$SrcImage"
                     } elseif ($IsBrowser) {
                         # Unknown process, read-only access -- log for correlator, no console alert
                         $Severity = "UNKNOWN"
@@ -538,14 +621,17 @@ while ($true) {
                 # Config pre-filters to executable extensions only
                 # --------------------------------------------------
                 11 {
-                    $Image    = Get-SysmonField $EvtData "Image"
-                    $Target   = Get-SysmonField $EvtData "TargetFilename"
-                    $User     = Get-SysmonField $EvtData "User"
-                    $ProcName = Get-FileName $Image
-                    $FileName = Get-FileName $Target
-                    $IsHot    = Test-IsHighRiskPath $Target
+                    $Image        = Get-SysmonField $EvtData "Image"
+                    $Target       = Get-SysmonField $EvtData "TargetFilename"
+                    $User         = Get-SysmonField $EvtData "User"
+                    $ProcName     = Get-FileName $Image
+                    $FileName     = Get-FileName $Target
+                    $IsHot        = Test-IsHighRiskPath $Target
+                    # PowerShell writes __PSScriptPolicyTest_*.ps1 to Temp to probe execution policy.
+                    # These are self-cleaning and entirely harmless -- suppress to OK.
+                    $IsPolicyTest = ($FileName -like "__PSScriptPolicyTest_*")
 
-                    if ($IsHot) {
+                    if ($IsHot -and -not $IsPolicyTest) {
                         $Severity = "SUSPICIOUS"
                         $Message  = "SYSMON_EID11_FILE_HOTPATH: Process=$ProcName | File=$FileName | Path=$Target | User=$User"
                     } else {
@@ -663,8 +749,18 @@ while ($true) {
                     $ProcId     = Get-SysmonField $EvtData "ProcessId"
                     $ProcGuid   = Get-SysmonField $EvtData "ProcessGuid"
                     $ProcName   = Get-FileName $Image
-                    $Severity   = "CRITICAL"
-                    $Message    = "SYSMON_EID25_PROCESS_TAMPER: Process=$ProcName | PID=$ProcId | TamperType=$TamperType | GUID=$ProcGuid | Path=$Image"
+
+                    if ($TamperType -eq "Image is replaced") {
+                        # Confirmed process hollowing / herpaderping -- PE body swapped in memory.
+                        # Highest-confidence injection signal from Sysmon.
+                        $Severity = "CRITICAL"
+                    } else {
+                        # "Image is locked" -- file in use during execution.
+                        # Common false positive for POSIX-emulation runtimes (Git Bash, WSL utils).
+                        # Still logged for correlator context -- TamperType is in the message body.
+                        $Severity = "SUSPICIOUS"
+                    }
+                    $Message = "SYSMON_EID25_PROCESS_TAMPER: Process=$ProcName | PID=$ProcId | TamperType=$TamperType | GUID=$ProcGuid | Path=$Image"
                 }
 
                 default {
@@ -677,7 +773,9 @@ while ($true) {
             if ($Severity -eq "SUSPICIOUS" -or $Severity -eq "CRITICAL") {
                 Write-Host "[$NowStr] [$Severity] $Message" -ForegroundColor (Get-SeverityColor $Severity)
             }
-            Write-Log $Severity $Message
+            if ($Severity -ne "OK" -or $ID -eq 5) {
+                Write-Log $Severity $Message
+            }
         }
 
     } catch {
