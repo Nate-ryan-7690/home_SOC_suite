@@ -24,6 +24,7 @@ import json
 import os
 import sys
 import time
+import threading
 from datetime import datetime
 
 import config
@@ -40,7 +41,8 @@ import alert_manager
 # Separate from Alert_Log — records cycle health, not alerts.
 # ============================================================
 
-ENGINE_LOG = os.path.join(config.LOG_DIR, 'Engine_Log.txt')
+ENGINE_LOG         = os.path.join(config.LOG_DIR, 'Engine_Log.txt')
+ENGINE_HEALTH_FILE = os.path.join(config.CONFIG_DIR, 'Engine_Health.json')
 
 
 def _log(severity: str, message: str):
@@ -50,6 +52,37 @@ def _log(severity: str, message: str):
     os.makedirs(os.path.dirname(ENGINE_LOG), exist_ok=True)
     with open(ENGINE_LOG, 'a', encoding='utf-8') as f:
         f.write(line + '\n')
+
+
+# ============================================================
+# ENGINE HEARTBEAT
+# Background daemon thread — writes Engine_Health.json every 5s.
+# Same format as collector health JSONs so app.py can read it identically.
+# ============================================================
+
+_engine_start_time = datetime.now()
+_engine_cycle      = 0
+
+
+def _heartbeat_loop():
+    while True:
+        try:
+            uptime  = datetime.now() - _engine_start_time
+            hours   = int(uptime.total_seconds() // 3600)
+            minutes = int((uptime.total_seconds() % 3600) // 60)
+            seconds = int(uptime.total_seconds() % 60)
+            payload = {
+                "collector": "engine",
+                "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                "status":    "ACTIVE",
+                "uptime":    f"{hours}h{minutes}m{seconds}s",
+                "cycle":     _engine_cycle,
+            }
+            with open(ENGINE_HEALTH_FILE, 'w', encoding='utf-8') as f:
+                json.dump(payload, f)
+        except Exception:
+            pass
+        time.sleep(5)
 
 
 # ============================================================
@@ -214,11 +247,16 @@ def startup():
 # ============================================================
 
 def main():
+    global _engine_cycle
     startup()
+
+    t = threading.Thread(target=_heartbeat_loop, daemon=True)
+    t.start()
 
     cycle = 0
     while True:
         cycle += 1
+        _engine_cycle = cycle
         try:
             summary = run_cycle()
 

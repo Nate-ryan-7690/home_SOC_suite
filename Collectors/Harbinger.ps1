@@ -36,6 +36,12 @@ $WindowsInterpreters = @("powershell", "pwsh", "cmd", "wscript", "cscript", "msh
 # --- LOLBINS (always log at SUSPICIOUS) ---
 $LOLBins = @("certutil", "bitsadmin", "regsvr32", "rundll32", "msiexec", "wmic", "forfiles", "msbuild")
 
+# --- TRUSTED PARENT → CHILD EXACT PATH PAIRS ---
+# Keys = SHA256(path.ToLower()). CMD values = Base64(pattern).
+# Four factors must match: parent path + parent CMD + child path + child CMD.
+# powershell.exe health checks stay SUSPICIOUS — no stable CMD pattern to anchor to.
+$TrustedParentChildMap = @{}
+
 # --- VERSION DETECTION ---
 $PSMajor = $PSVersionTable.PSVersion.Major
 
@@ -53,6 +59,16 @@ function Get-SeverityColor($Severity) {
         "CRITICAL"   { return "Red" }
         default      { return "White" }
     }
+}
+
+function Get-PathHash($Path) {
+    $Bytes = [System.Text.Encoding]::UTF8.GetBytes($Path.ToLower())
+    $SHA   = [System.Security.Cryptography.SHA256]::Create()
+    ([BitConverter]::ToString($SHA.ComputeHash($Bytes)) -replace '-', '').ToLower()
+}
+
+function Decode-Pattern($Encoded) {
+    [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Encoded))
 }
 
 function Get-ProcessSeverity($NameLower, $PPath) {
@@ -129,8 +145,14 @@ Write-Host "Reading all running processes..." -ForegroundColor DarkGray
 
 try {
     $AllProcs   = Get-CimInstance Win32_Process -ErrorAction Stop
-    $ProcLookup = @{}
-    foreach ($P in $AllProcs) { $ProcLookup[$P.ProcessId] = $P.Name }
+    $ProcLookup     = @{}
+    $ProcPathLookup = @{}
+    $ProcCmdLookup  = @{}
+    foreach ($P in $AllProcs) {
+        $ProcLookup[$P.ProcessId]     = $P.Name
+        $ProcPathLookup[$P.ProcessId] = $P.ExecutablePath
+        $ProcCmdLookup[$P.ProcessId]  = $P.CommandLine
+    }
 
     Write-Host "[+] Found $($AllProcs.Count) running processes" -ForegroundColor Green
     "--- STARTUP SNAPSHOT AT $(Get-Date) | $($AllProcs.Count) processes ---" | Out-File $LogFile -Append -Encoding UTF8
@@ -143,6 +165,25 @@ try {
         $PPID       = $Proc.ParentProcessId
         $ParentName = if ($ProcLookup.ContainsKey($PPID)) { $ProcLookup[$PPID] } else { "Unknown" }
         $Severity   = Get-ProcessSeverity $NameKey $PPath
+
+        # TrustedParentChildMap override (parent path + parent CMD + child path + child CMD)
+        $ParentExe = $ProcPathLookup[$PPID]
+        $ParentCmd = $ProcCmdLookup[$PPID]
+        if ($ParentExe) {
+            $PHash = Get-PathHash $ParentExe
+            if ($TrustedParentChildMap.ContainsKey($PHash)) {
+                $Entry   = $TrustedParentChildMap[$PHash]
+                $PCmdPat = if ($Entry.ParentCmd) { Decode-Pattern $Entry.ParentCmd } else { $null }
+                $PCmdOk  = (-not $PCmdPat) -or ($ParentCmd -like $PCmdPat)
+                if ($PCmdOk -and $PPath) {
+                    $CHash = Get-PathHash $PPath
+                    if ($Entry.Children.ContainsKey($CHash)) {
+                        $CCmdPat = Decode-Pattern $Entry.Children[$CHash]
+                        if (-not $CCmdPat -or $PCmd -like $CCmdPat) { $Severity = "OK" }
+                    }
+                }
+            }
+        }
 
         Write-Log $Severity "STARTUP: $PName | PID: $($Proc.ProcessId) | Parent: $ParentName ($PPID) | Path: $PPath | CMD: $PCmd"
 
@@ -244,6 +285,26 @@ while ($true) {
 
         $NameKey  = ($PName -replace '\.exe$', '').ToLower()
         $Severity = Get-ProcessSeverity $NameKey $PPath
+
+        # TrustedParentChildMap override (parent path + parent CMD + child path + child CMD)
+        try {
+            $PI = Get-CimInstance Win32_Process -Filter "ProcessId = $PPID" -ErrorAction SilentlyContinue
+            if ($PI -and $PI.ExecutablePath) {
+                $PHash = Get-PathHash $PI.ExecutablePath
+                if ($TrustedParentChildMap.ContainsKey($PHash)) {
+                    $Entry   = $TrustedParentChildMap[$PHash]
+                    $PCmdPat = if ($Entry.ParentCmd) { Decode-Pattern $Entry.ParentCmd } else { $null }
+                    $PCmdOk  = (-not $PCmdPat) -or ($PI.CommandLine -like $PCmdPat)
+                    if ($PCmdOk -and $PPath) {
+                        $CHash = Get-PathHash $PPath
+                        if ($Entry.Children.ContainsKey($CHash)) {
+                            $CCmdPat = Decode-Pattern $Entry.Children[$CHash]
+                            if (-not $CCmdPat -or $PCmd -like $CCmdPat) { $Severity = "OK" }
+                        }
+                    }
+                }
+            }
+        } catch {}
 
         # New to baseline = UNKNOWN minimum
         if (-not $Baseline.ContainsKey($NameKey)) {

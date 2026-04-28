@@ -59,7 +59,26 @@ HEALTH_FILES = {
     "seceventlog":     os.path.join(CONFIG_PATH, "SecEventLog_Health.json"),
     "doh_detector":    os.path.join(CONFIG_PATH, "DoHDetector_Health.json"),
     "sysmonwatcher":   os.path.join(CONFIG_PATH, "SysmonWatcher_Health.json"),
+    "engine":          os.path.join(CONFIG_PATH, "Engine_Health.json"),
 }
+
+# Maps COLLECTORS .ps1 filenames → HEALTH_FILES keys
+COLLECTOR_HEALTH_MAP = {
+    "Warden.ps1":         "warden",
+    "Sentinel.ps1":       "sentinel",
+    "Bulwark.ps1":        "bulwark",
+    "Steward.ps1":        "steward",
+    "CITYGUARD.ps1":      "cityguard",
+    "Watchman.ps1":       "watchman",
+    "Registry_Warden.ps1":"registry_warden",
+    "Harbinger.ps1":      "harbinger",
+    "Bloodhound.ps1":     "bloodhound",
+    "SecEventLog.ps1":    "seceventlog",
+    "DOH_Detector.ps1":   "doh_detector",
+    "SysmonWatcher.ps1":  "sysmonwatcher",
+}
+
+STATUS_FRESHNESS_THRESHOLD = 15  # seconds — dot goes red within 15s of collector stopping
 
 # ============================================================
 # COLLECTOR DEFINITIONS
@@ -113,41 +132,33 @@ def db_query(sql, params=()):
 # ============================================================
 # PROCESS STATUS — ground truth for green/red dots
 # ============================================================
-def get_running_scripts():
-    """Return set of script filenames currently running as pwsh processes."""
+def _health_json_active(health_key):
+    """Return True if the named health JSON exists and was written within STATUS_FRESHNESS_THRESHOLD."""
+    path = HEALTH_FILES.get(health_key)
+    if not path or not os.path.exists(path):
+        return False
     try:
-        result = subprocess.run(
-            ["powershell", "-Command",
-             "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
-             "$cls  = @((Get-CimInstance Win32_Process -Filter \"Name='pwsh.exe'\").CommandLine); "
-             "$cls += @((Get-CimInstance Win32_Process -Filter \"Name='python.exe'\").CommandLine); "
-             "($cls | Where-Object { $_ }) -join \"`n\""],
-            capture_output=True, encoding='utf-8', errors='replace', timeout=15
-        )
-        lines = result.stdout.lower()
-        running = set()
-        for script in COLLECTORS + ANALYST_SCRIPTS:
-            if script.lower() in lines:
-                running.add(script)
-        return running
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        ts  = datetime.strptime(data['timestamp'], '%Y-%m-%d %H:%M:%S')
+        lag = (datetime.now() - ts).total_seconds()
+        return lag <= STATUS_FRESHNESS_THRESHOLD
     except Exception:
-        return set()
+        return False
+
+
+def get_running_scripts():
+    """Return set of script filenames currently running, based on health JSON freshness."""
+    running = set()
+    for script, key in COLLECTOR_HEALTH_MAP.items():
+        if _health_json_active(key):
+            running.add(script)
+    return running
 
 
 def get_engine_running():
-    """Check engine status via PID file written by Launch_Engine.ps1."""
-    pid_file = os.path.join(CONFIG_PATH, "Engine.pid")
-    try:
-        with open(pid_file, "r") as f:
-            pid = int(f.read().strip())
-        result = subprocess.run(
-            ["powershell", "-Command",
-             f"Get-Process -Id {pid} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id"],
-            capture_output=True, text=True, timeout=5
-        )
-        return result.stdout.strip() == str(pid)
-    except Exception:
-        return False
+    """Return True if engine health JSON is fresh."""
+    return _health_json_active("engine")
 
 
 # ============================================================
