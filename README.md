@@ -396,6 +396,28 @@ See [`roadmap.md`](roadmap.md) for the full development timeline.
 
 ---
 
+## Known Noisy Alerts — Before Hardening
+
+On a fresh install, several alert types will fire regularly until machine-specific
+hardening is applied. These are expected and do not represent real detections.
+
+| Collector | Alert | Cause |
+|---|---|---|
+| Sentinel | CRITICAL environmental violation | Any third-party software installed outside the default trusted zone paths (Windows, Program Files) — cloud sync clients, communication apps, and vendor utilities that install to AppData are common sources |
+| Sentinel | SUSPICIOUS TELEMETRY_GAP | IPv6 loopback and link-local addresses fail geolocation lookup — fixed in current build |
+| SysmonWatcher | SUSPICIOUS/CRITICAL on Rules 31, 33, 34 | Antivirus and endpoint security software regularly performs LSASS reads, raw disk reads, and loads DLLs from user-writable paths as part of normal operation |
+| SysmonWatcher | SUSPICIOUS on Rule 28 | Development tools that attach to browser processes for debugging will trigger the browser debugger attachment rule |
+| Bulwark | SUSPICIOUS GeoIP failures | Connections on private and reserved IP ranges cannot be geolocated — produces TELEMETRY_GAP until whitelisted |
+| Bloodhound | SUSPICIOUS DGA detection | Short-lived or low-sample-count DNS queries trigger entropy checks before the rolling baseline stabilises |
+| Warden | SUSPICIOUS MANIFEST_MISSING | No FIM manifest exists on first run — build with `.\Warden.ps1 -BuildManifest` after initial setup |
+| Warden | SUSPICIOUS COLLECTOR_DOWN | Collectors not yet deployed have no heartbeat file — expected until the full suite is running |
+| DoH_Detector | CRITICAL for browser DoH | Browsers configured to use DNS-over-HTTPS will fire until added to the allowed process list |
+
+Machine-specific hardening (trusted process lists, path whitelists, known-safe entries)
+is applied locally and is not included in this repository.
+
+---
+
 ## Notes
 
 - Set `$RootPath` in each script to the folder where you installed the SOC Suite.
