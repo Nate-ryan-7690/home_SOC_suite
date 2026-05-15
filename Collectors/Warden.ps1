@@ -33,18 +33,27 @@ $ArchiveScanInterval   = 12    # Scan reports + archives every N cycles (~1 hour
 $MaintenanceTimeoutSec = 3600  # Alert SUSPICIOUS if maintenance flag active > 1 hour
 $WatchTaskName         = "HomSOC_WardenSelfWatch"
 
-# Collectors expected to be running -- analysts run on demand, not listed here
-$ExpectedCollectors = @(
-    "Sentinel.ps1",
-    "Bulwark.ps1",
-    "Steward.ps1",
-    "CITYGUARD.ps1",
-    "Watchman.ps1",
-    "Registry_Warden.ps1",
-    "Harbinger.ps1",
-    "Bloodhound.ps1",
-    "SysmonWatcher.ps1"   # Phase 7A — Sysmon kernel-level event collector
-)
+# Collectors expected to be running -- analysts run on demand, not listed here.
+# Maps the script filename to its heartbeat Health JSON in Config\.
+# Filenames are irregular (CITYGUARD/CityGuard, Registry_Warden/RegistryWarden,
+# DOH_Detector/DoHDetector) so an explicit mapping is safer than derivation.
+$ExpectedCollectors = [ordered]@{
+    "Sentinel.ps1"        = "Sentinel_Health.json"
+    "Bulwark.ps1"         = "Bulwark_Health.json"
+    "Steward.ps1"         = "Steward_Health.json"
+    "CITYGUARD.ps1"       = "CityGuard_Health.json"
+    "Watchman.ps1"        = "Watchman_Health.json"
+    "Registry_Warden.ps1" = "RegistryWarden_Health.json"
+    "Harbinger.ps1"       = "Harbinger_Health.json"
+    "Bloodhound.ps1"      = "Bloodhound_Health.json"
+    "SysmonWatcher.ps1"   = "SysmonWatcher_Health.json"
+    "SecEventLog.ps1"     = "SecEventLog_Health.json"
+    "DOH_Detector.ps1"    = "DoHDetector_Health.json"
+}
+
+# Collector silence threshold -- matches Python engine HEARTBEAT_SILENCE_THRESHOLD.
+# Collectors write heartbeat every 5s; >60s old = process dead, hung, or never started.
+$HeartbeatStaleSec = 60
 
 # ============================================================
 # FUNCTIONS
@@ -220,6 +229,24 @@ function Test-LogIntegrity($PrevSizes) {
             continue
         }
         if ($Current[$Path] -lt $PrevSizes[$Path]) {
+            # Rotation-aware: legitimate rotation produces BOTH a fresh live log
+            # AND a matching fresh archive entry. An attacker truncating the live
+            # log produces only the first. Require both before silently re-baselining.
+            $CycleSlack    = $RefreshSeconds + 30
+            $LiveCreated   = ((Get-Date) - (Get-Item $Path).CreationTime).TotalSeconds
+            $LogLeaf       = [IO.Path]::GetFileNameWithoutExtension($Path)
+            $BaseName      = $LogLeaf -replace '_Log$', ''
+            $RecentArchive = Get-ChildItem "$RootPath\Logs\Archives" `
+                                -Filter "${BaseName}_Archived_*" -ErrorAction SilentlyContinue |
+                                Where-Object { ((Get-Date) - $_.CreationTime).TotalSeconds -le $CycleSlack } |
+                                Select-Object -First 1
+
+            if ($LiveCreated -le $CycleSlack -and $RecentArchive) {
+                $NowStr = (Get-Date).ToString("HH:mm:ss")
+                Write-Host "[$NowStr] [OK] LOG_ROTATED: $(Split-Path $Path -Leaf) -> $($RecentArchive.Name) (re-baselined)" -ForegroundColor Green
+                Write-Log "OK" "LOG_ROTATED: $(Split-Path $Path -Leaf) -> $($RecentArchive.Name) | Re-baselined"
+                continue
+            }
             $Lost = $PrevSizes[$Path] - $Current[$Path]
             $Msg  = "LOG_TRUNCATED: $(Split-Path $Path -Leaf) | Was: $($PrevSizes[$Path]) bytes | Now: $($Current[$Path]) bytes | Lost: $Lost bytes"
             Write-Host "[CRITICAL] $Msg" -ForegroundColor Red
@@ -231,19 +258,37 @@ function Test-LogIntegrity($PrevSizes) {
 }
 
 function Test-CollectorHealth {
-    try {
-        $Processes = Get-CimInstance Win32_Process `
-            -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -ErrorAction Stop
-        foreach ($Collector in $ExpectedCollectors) {
-            $Running = $Processes | Where-Object { $_.CommandLine -like "*$Collector*" }
-            if (-not $Running) {
-                $Msg = "COLLECTOR_DOWN: $Collector not found in running processes"
+    # Heartbeat-based detection. Each collector writes its Health JSON every 5s.
+    # A heartbeat older than $HeartbeatStaleSec means the collector is dead, hung,
+    # or has not yet started this Warden lifetime.
+    $Invariant = [System.Globalization.CultureInfo]::InvariantCulture
+
+    foreach ($Script in $ExpectedCollectors.Keys) {
+        $HealthFile = Join-Path "$RootPath\Config" $ExpectedCollectors[$Script]
+
+        if (-not (Test-Path $HealthFile)) {
+            $Msg = "COLLECTOR_DOWN: $Script -- no heartbeat file ($($ExpectedCollectors[$Script]))"
+            Write-Host "[SUSPICIOUS] $Msg" -ForegroundColor DarkYellow
+            Write-Log "SUSPICIOUS" $Msg
+            continue
+        }
+
+        try {
+            $Json   = Get-Content $HealthFile -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
+            $HbTime = [datetime]::ParseExact($Json.timestamp, "yyyy-MM-dd HH:mm:ss", $Invariant)
+            $AgeSec = ((Get-Date) - $HbTime).TotalSeconds
+
+            if ($AgeSec -gt $HeartbeatStaleSec) {
+                $AgeMin = [Math]::Round($AgeSec / 60, 1)
+                $Msg = "COLLECTOR_DOWN: $Script -- heartbeat stale (${AgeMin} min old, threshold ${HeartbeatStaleSec}s)"
                 Write-Host "[SUSPICIOUS] $Msg" -ForegroundColor DarkYellow
                 Write-Log "SUSPICIOUS" $Msg
             }
+        } catch {
+            $Msg = "COLLECTOR_DOWN: $Script -- heartbeat file unreadable: $($_.Exception.Message)"
+            Write-Host "[SUSPICIOUS] $Msg" -ForegroundColor DarkYellow
+            Write-Log "SUSPICIOUS" $Msg
         }
-    } catch {
-        Write-Log "UNKNOWN" "Collector health check failed: $($_.Exception.Message)"
     }
 }
 
@@ -454,9 +499,13 @@ while ($true) {
     $LogSizes = Test-LogIntegrity $LogSizes
 
     # --------------------------------------------------------
-    # SECTION 4: COLLECTOR HEALTH (every cycle)
+    # SECTION 4: COLLECTOR HEALTH (every cycle after warmup)
     # --------------------------------------------------------
-    Test-CollectorHealth
+    # Skip cycle 1 -- collector spawns are staggered on slow hardware.
+    # Analyst confirms dashboard green dots at startup before relying on Warden.
+    if ($ScanCount -ge 2) {
+        Test-CollectorHealth
+    }
 
     Write-Host "[$NowStr] Scan $ScanCount complete. Next in ${RefreshSeconds}s."
     Start-Sleep -Seconds $RefreshSeconds
