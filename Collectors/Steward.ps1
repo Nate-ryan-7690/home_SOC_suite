@@ -305,6 +305,15 @@ while ($true) {
                     [PSCustomObject]@{ Name = $_.Name; CPUPercent = $CPUPercent; RAM = $ProcRAM }
                 }
                 $TopCPU = $CPUResults | Sort-Object CPUPercent -Descending | Select-Object -First $TopProcesses
+                $CPUResults | Where-Object { $_.CPUPercent -ge $CPUUnknown } | ForEach-Object {
+                    $Severity = "OK"
+                    if ($_.CPUPercent -ge $CPUCritical)      { $Severity = "CRITICAL" }
+                    elseif ($_.CPUPercent -ge $CPUSuspicious) { $Severity = "SUSPICIOUS" }
+                    elseif ($_.CPUPercent -ge $CPUUnknown)    { $Severity = "UNKNOWN" }
+                    if ($Severity -ne "OK") {
+                        Write-Log $Severity "HIGH CPU: $($_.Name) at $($_.CPUPercent)% | RAM: $($_.RAM) MB"
+                    }
+                }
             } catch {}
         }
     }
@@ -344,17 +353,6 @@ while ($true) {
     # --- LOG ALERTS ---
     if ($CPUTotal -ge $CPUCritical) { Write-Log "CRITICAL" "HIGH CPU: System at $CPUTotal%" }
     if ($RAMPct -ge $RAMCritical)   { Write-Log "CRITICAL" "HIGH RAM: System at $RAMPct%" }
-    if ($TopCPU) {
-        foreach ($Proc in $TopCPU) {
-            $Severity = "OK"
-            if ($Proc.CPUPercent -ge $CPUCritical)      { $Severity = "CRITICAL" }
-            elseif ($Proc.CPUPercent -ge $CPUSuspicious) { $Severity = "SUSPICIOUS" }
-            elseif ($Proc.CPUPercent -ge $CPUUnknown)    { $Severity = "UNKNOWN" }
-            if ($Severity -ne "OK") {
-                Write-Log $Severity "HIGH CPU: $($Proc.Name) at $($Proc.CPUPercent)% | RAM: $($Proc.RAM) MB"
-            }
-        }
-    }
 
     # --- WRITE STATUS FILE (read by Dashboard every 60s) ---
     try {
