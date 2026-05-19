@@ -43,6 +43,12 @@ _INTERPRETER_SET = {i.lower() for i in config.INTERPRETER_LIST}
 _HOLLOWING_SET   = {h.lower() for h in config.HOLLOWING_TARGETS}
 _NEVER_NET_SET   = {n.lower() for n in config.NEVER_NET_BINARIES}
 
+_RAW_DISK_WHITELIST_SET = {
+    (b.lower() if b.lower().endswith('.exe') else b.lower() + '.exe')
+    for b in config.RAW_DISK_READ_WHITELIST
+}
+_MODULE_LOAD_TIME = datetime.now()   # startup grace period anchor — set once at import
+
 
 # ============================================================
 # HELPERS
@@ -1836,11 +1842,11 @@ def _rule_29(event):
     arguments. These are primary initial-access and persistence indicators.
     TrustedHighRiskProcesses (Defender, Claude Code) are downgraded to SUSPICIOUS
     at the collector level — severity passed through here.
-    Source: SysmonWatcher (event_type=PROCESS, subtype=HIGH_RISK_LAUNCH|ENCODED_CMDLINE)
+    Source: SysmonWatcher (event_type=PROCESS, subtype=HIGH_RISK_LAUNCH|ENCODED_CMD)
     """
     if event['event_type'] != 'PROCESS':
         return
-    if event['subtype'] not in ('HIGH_RISK_LAUNCH', 'ENCODED_CMDLINE'):
+    if event['subtype'] not in ('HIGH_RISK_LAUNCH', 'ENCODED_CMD'):
         return
     if event['base_severity'] not in ('CRITICAL', 'SUSPICIOUS'):
         return
@@ -1863,7 +1869,7 @@ def _rule_29(event):
             f"[Rule 29] High-Risk Path Launch. "
             f"Process '{event['actor'] or 'unknown'}' launched from a staging path "
             f"({event['process_path'] or 'path not recorded'}). "
-            f"{'Encoded or obfuscated command-line arguments detected. ' if event['subtype'] == 'ENCODED_CMDLINE' else ''}"
+            f"{'Encoded or obfuscated command-line arguments detected. ' if event['subtype'] == 'ENCODED_CMD' else ''}"
             f"High-risk paths (Downloads, Temp, AppData\\Roaming, Public, ProgramData) "
             f"are primary attacker staging areas. Cross-reference with Rule 38 (downloaded file) "
             f"and Rule 13 (initial access) for the same actor. "
@@ -2099,6 +2105,11 @@ def _rule_35(event):
         return
     if event['base_severity'] not in ('CRITICAL', 'SUSPICIOUS'):
         return
+    actor = (event['actor'] or '').lower()
+    if not actor.endswith('.exe'):
+        actor += '.exe'
+    if actor in _RAW_DISK_WHITELIST_SET:
+        return
     weight   = config.RULE_WEIGHTS[35]
     severity = event['base_severity']
     alert_id = _make_alert_id(35, event['event_id'])
@@ -2211,9 +2222,9 @@ def _rule_37(event):
 
 def _rule_38(event):
     """Rule 38 — Downloaded Executable  (CRITICAL → SUSPICIOUS)
-    EID 11 (EXECUTABLE_CREATED): executable dropped in a user-writable staging
+    EID 11 (FILE_HOTPATH): executable dropped in a user-writable staging
     path — payload drop indicator.
-    EID 15 (ZONE_IDENTIFIER): file with Zone.Identifier ADS (Mark of the Web,
+    EID 15 (DOWNLOADED_FILE): file with Zone.Identifier ADS (Mark of the Web,
     ZoneId=3) detected — file was downloaded from the internet and has not yet
     been executed (MOTW is cleared by many droppers on execution).
     Cross-reference with Rule 29 if the same file later launches as a process.
@@ -2221,7 +2232,7 @@ def _rule_38(event):
     """
     if event['event_type'] != 'FILE':
         return
-    if event['subtype'] not in ('EXECUTABLE_CREATED', 'ZONE_IDENTIFIER'):
+    if event['subtype'] not in ('FILE_HOTPATH', 'DOWNLOADED_FILE'):
         return
     if event['base_severity'] not in ('CRITICAL', 'SUSPICIOUS'):
         return
@@ -2230,7 +2241,7 @@ def _rule_38(event):
     alert_id = _make_alert_id(38, event['event_id'])
     subtype_desc = (
         'executable dropped in high-risk staging path'
-        if event['subtype'] == 'EXECUTABLE_CREATED'
+        if event['subtype'] == 'FILE_HOTPATH'
         else 'internet-origin file (Zone.Identifier / Mark of the Web) detected'
     )
     db.insert_detection({
@@ -2249,7 +2260,7 @@ def _rule_38(event):
             f"[Rule 38] Downloaded Executable — {event['subtype']}. "
             f"Process '{event['actor'] or 'unknown'}': {subtype_desc}. "
             f"File: {event['process_path'] or 'not recorded'}. "
-            f"{'Zone.Identifier present — file not yet executed. ' if event['subtype'] == 'ZONE_IDENTIFIER' else ''}"
+            f"{'Zone.Identifier present — file not yet executed. ' if event['subtype'] == 'DOWNLOADED_FILE' else ''}"
             f"Cross-reference with Rule 29 if the same file later launches as a process. "
             f"Confidence: {weight:.0%}. Evidence: {event['event_id']}."
         ),
@@ -2374,6 +2385,8 @@ def _rule_41(reference_time=None):
     Source: health_db (collector status) + events (concurrent activity).
     """
     _now = reference_time or datetime.now()
+    if (_now - _MODULE_LOAD_TIME).total_seconds() < config.STARTUP_GRACE_SECONDS:
+        return
 
     down_collectors = [
         row for row in health_db.get_all_collector_status()
@@ -2457,7 +2470,7 @@ def _rule_41(reference_time=None):
         persistence_events = [
             e for e in susp_crit
             if e['collector_name'] == 'cityguard'
-            and e['event_type'] == 'TASK'
+            and e['event_type'] == 'SCHEDULED_TASK'
         ]
         if persistence_events:
             actors = ', '.join({e['actor'] for e in persistence_events if e['actor']})
@@ -2533,6 +2546,8 @@ def _rule_42(reference_time=None):
     Source: health_db only.
     """
     _now = reference_time or datetime.now()
+    if (_now - _MODULE_LOAD_TIME).total_seconds() < config.STARTUP_GRACE_SECONDS:
+        return
 
     down_collectors = [
         row['collector_name']

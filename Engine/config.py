@@ -62,7 +62,7 @@ LOG_FILES = {
 # ENGINE POLL INTERVALS (seconds)
 # Rotate these values periodically.
 # ============================================================
-ENGINE_POLL_INTERVAL      = 60    # Main loop — full pipeline cycle (1 min, temporary for backlog drain)
+ENGINE_POLL_INTERVAL      = 300   # Main loop — full pipeline cycle (5 min)
 INGEST_LINE_CAP           = 5000  # Max lines per collector per cycle (catch-up guard)
 SHORT_POLL_INTERVAL       = 30    # Rules 3, 4, 6, 8, 13, 17, 19
 OPERATIONAL_POLL_INTERVAL = 300   # Rules 2, 11, 14, 15
@@ -336,7 +336,8 @@ C2_BEACON_MIN_SESSIONS = 3
 COLLECTOR_SILENCE_THRESHOLD  = 1800   # 30 minutes — log event silence threshold
 HEARTBEAT_SILENCE_THRESHOLD  = 60    # seconds — heartbeat writes every 5s, gap >60s = process dead
 HEARTBEAT_RETENTION_HOURS    = 48    # hours — collector_heartbeats history retained in health.db
-ENGINE_FLOOD_THRESHOLD       = 200   # alerts per 60 seconds — lower to 50 after baseline period
+ENGINE_FLOOD_THRESHOLD       = 50    # alerts per 60 seconds
+STARTUP_GRACE_SECONDS        = 120   # seconds after engine start before Rules 41/42 can fire
 
 # ============================================================
 # RESOURCE EXFILTRATION PAIRING WINDOW — Rule 1
@@ -449,6 +450,25 @@ KNOWN_BAD_PAIRS = {
 # path fragment in CMD is the legitimate dashboard collector launcher.
 # Rules 43 and 47 skip any event whose CMD field contains this string.
 SUITE_LAUNCHER_CMD_FRAGMENT = r"\soc\scripts"
+
+# ============================================================
+# RAW DISK READ WHITELIST — Rule 35
+# Process names known to legitimately perform raw disk reads.
+# Match is case-insensitive, .exe suffix optional.
+# Add machine-specific entries locally — do not push to GitHub.
+# ============================================================
+RAW_DISK_READ_WHITELIST = [
+    # Windows Search Indexer — indexes at block level
+    "searchindexer.exe",
+    # Windows Defender — AV scanning uses raw I/O
+    "msmpeng.exe",
+    # Windows System Assessment Tool — disk benchmark
+    "winsat.exe",
+    # Disk Defragmentation Service
+    "defrag.exe",
+    # Spatial Audio License Service — standard Windows component
+    "spatialaudiolicensesrv.exe",
+]
 
 # ============================================================
 # SYSTEM
