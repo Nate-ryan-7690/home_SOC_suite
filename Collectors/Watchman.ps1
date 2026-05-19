@@ -103,7 +103,7 @@ try {
         $Message     = "EventID $($Event.Id) | $Description | Time: $Timestamp"
 
         # Only log if not already recorded
-        if ($ExistingLog -notcontains "[$Timestamp]") {
+        if (-not ($ExistingLog | Where-Object { $_.Contains("Time: $Timestamp") })) {
             Write-Log $Severity $Message
         }
     }
