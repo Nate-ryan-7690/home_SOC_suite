@@ -340,9 +340,15 @@ while ($true) {
                 $OldPath = $BaselineServices[$Name].ImagePath
                 $NewPath = $CurrentServices[$Name].ImagePath
                 if ($OldPath -ne $NewPath -and -not ([string]::IsNullOrWhiteSpace($OldPath) -and [string]::IsNullOrWhiteSpace($NewPath))) {
-                    $Message = "SERVICE PATH CHANGED: $Name | Was: $OldPath | Now: $NewPath"
-                    Write-Host "[SUSPICIOUS] $Message" -ForegroundColor DarkYellow
-                    Write-Log "SUSPICIOUS" $Message
+                    # DriverStore paths require TrustedInstaller + driver signing to modify --
+                    # attack prerequisite is OS-level compromise (out of scope for user-space tools).
+                    # Full old/new paths preserved in log for cross-collector correlation.
+                    $DriverStoreChange = ($OldPath -like "*\DriverStore\FileRepository\*" -and
+                                         $NewPath -like "*\DriverStore\FileRepository\*")
+                    $Severity = if ($DriverStoreChange) { "UNKNOWN" } else { "SUSPICIOUS" }
+                    $Message  = "SERVICE PATH CHANGED: $Name | Was: $OldPath | Now: $NewPath"
+                    Write-Host "[$Severity] $Message" -ForegroundColor (Get-SeverityColor $Severity)
+                    Write-Log $Severity $Message
                     $BaselineServices[$Name].ImagePath = $NewPath
                     $ServiceAlertCount++; $BaselineChanged = $true
                 }
