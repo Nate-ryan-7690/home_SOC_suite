@@ -35,8 +35,8 @@ function Get-SeverityColor($Severity) {
 }
 
 function Get-TaskSeverity($Task) {
-    $Action = $Task.Actions.Execute + $Task.Actions.Arguments
-    $Path   = $Task.TaskPath
+    $Action = $Task.Action   # snapshot property (string built by Get-TaskSnapshot)
+    $Path   = $Task.Path     # snapshot property (TaskPath stored as .Path)
 
     # Critical indicators
     if ($Action -like "*AppData*Temp*" -or
