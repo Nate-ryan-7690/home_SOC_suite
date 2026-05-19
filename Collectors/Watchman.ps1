@@ -16,6 +16,7 @@ $RootPath        = "$env:USERPROFILE\Desktop\SOC"
 $LogFile        = "$RootPath\Logs\Watchman_Log.txt"
 $ArchiveFolder  = "$RootPath\Logs\Archives"
 $HealthFile     = "$RootPath\Config\Watchman_Health.json"
+$StateFile      = "$RootPath\Config\Watchman_State.json"
 $RefreshSeconds = 60
 $LastEventTime  = $null
 
@@ -84,6 +85,17 @@ if (-not (Test-Path $LogFile)) {
 Write-Host "--- [WATCHMAN | LOADING HISTORICAL EVENTS] ---" -ForegroundColor Cyan
 Write-Host "Reading System event log history..." -ForegroundColor DarkGray
 
+# --- LOAD PERSISTED LAST EVENT TIME ---
+if (Test-Path $StateFile) {
+    try {
+        $Saved = Get-Content $StateFile -Encoding UTF8 | ConvertFrom-Json
+        $LastEventTime = [datetime]$Saved.LastEventTime
+        Write-Host "[+] Resumed from last event: $LastEventTime" -ForegroundColor Green
+    } catch {
+        Write-Host "[!] State file unreadable - logging all historical events." -ForegroundColor Yellow
+    }
+}
+
 try {
     $HistoricalEvents = Get-WinEvent -LogName System -ErrorAction SilentlyContinue |
         Where-Object { $_.Id -in $PowerEventIDs } |
@@ -92,25 +104,22 @@ try {
 
     Write-Host "[+] Found $($HistoricalEvents.Count) recent power events" -ForegroundColor Green
 
-    # Log historical events not already in log
-    $ExistingLog = if (Test-Path $LogFile) { Get-Content $LogFile -Encoding UTF8 } else { @() }
-
     foreach ($Event in $HistoricalEvents) {
-        $Hour        = $Event.TimeCreated.Hour
-        $Severity    = Get-EventSeverity $Event.Id $Hour
-        $Description = Get-EventDescription $Event.Id
-        $Timestamp   = $Event.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
-        $Message     = "EventID $($Event.Id) | $Description | Time: $Timestamp"
-
-        # Only log if not already recorded
-        if (-not ($ExistingLog | Where-Object { $_.Contains("Time: $Timestamp") })) {
+        if ($null -eq $LastEventTime -or $Event.TimeCreated -gt $LastEventTime) {
+            $Hour        = $Event.TimeCreated.Hour
+            $Severity    = Get-EventSeverity $Event.Id $Hour
+            $Description = Get-EventDescription $Event.Id
+            $Timestamp   = $Event.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
+            $Message     = "EventID $($Event.Id) | $Description | Time: $Timestamp"
             Write-Log $Severity $Message
         }
     }
 
-    # Set last event time to most recent historical event
+    # Persist last event time — survives log rotation and restarts
     if ($HistoricalEvents.Count -gt 0) {
         $LastEventTime = ($HistoricalEvents | Select-Object -Last 1).TimeCreated
+        @{ LastEventTime = $LastEventTime.ToString("yyyy-MM-dd HH:mm:ss") } |
+            ConvertTo-Json -Compress | Out-File $StateFile -Encoding UTF8
     }
 
     Write-Host "[+] Historical events logged" -ForegroundColor Green
