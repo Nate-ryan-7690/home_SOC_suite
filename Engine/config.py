@@ -452,23 +452,47 @@ KNOWN_BAD_PAIRS = {
 SUITE_LAUNCHER_CMD_FRAGMENT = r"\soc\scripts"
 
 # ============================================================
-# RAW DISK READ WHITELIST — Rule 35
-# Process names known to legitimately perform raw disk reads.
-# Match is case-insensitive, .exe suffix optional.
+# PATH-PINNED PROCESS WHITELISTS — Rules 35, 39, 21
+#
+# Format: {"process_name.exe": ["path_prefix_1", "path_prefix_2"]}
+# Both name AND path prefix must match for suppression to apply.
+# Matching is case-insensitive. Prefix is a startswith check.
+#
+# IMPORTANT: If process_path is empty or not recorded, the check
+# always fails — unknown-path processes are never suppressed
+# regardless of process name. This prevents name-spoofing bypass.
+#
 # Add machine-specific entries locally — do not push to GitHub.
 # ============================================================
-RAW_DISK_READ_WHITELIST = [
-    # Windows Search Indexer — indexes at block level
-    "searchindexer.exe",
-    # Windows Defender — AV scanning uses raw I/O
-    "msmpeng.exe",
+
+# Rule 35 — Raw Disk Read
+# Processes known to legitimately open raw disk device handles.
+RAW_DISK_READ_WHITELIST = {
+    # Windows Search Indexer — block-level indexing
+    "searchindexer.exe":          [r"C:\Windows\System32"],
+    # Windows Defender AV — raw I/O during scan
+    "msmpeng.exe":                [r"C:\ProgramData\Microsoft\Windows Defender"],
     # Windows System Assessment Tool — disk benchmark
-    "winsat.exe",
-    # Disk Defragmentation Service
-    "defrag.exe",
+    "winsat.exe":                 [r"C:\Windows\System32"],
+    # Disk Defragmentation
+    "defrag.exe":                 [r"C:\Windows\System32"],
     # Spatial Audio License Service — standard Windows component
-    "spatialaudiolicensesrv.exe",
-]
+    "spatialaudiolicensesrv.exe": [r"C:\Windows\System32"],
+    # Windows Error Reporting Manager
+    "wermgr.exe":                 [r"C:\Windows\System32"],
+}
+
+# Rule 39 — Process Image Locked (EID 25, SUSPICIOUS severity only)
+# CRITICAL severity (image replaced) is never suppressed — that is
+# confirmed process hollowing and must always alert.
+# Populate locally with POSIX-emulation runtimes (Git Bash, WSL).
+IMAGE_LOCKED_WHITELIST = {}
+
+# Rule 21 — BYOI / Interpreter Execution (UNKNOWN trust only)
+# HIGH_RISK path interpreters are never suppressed.
+# Unknown-path events are never suppressed (path cannot be verified).
+# Populate locally once interpreter paths are confirmed by Harbinger.
+BYOI_PATH_WHITELIST = {}
 
 # ============================================================
 # SYSTEM

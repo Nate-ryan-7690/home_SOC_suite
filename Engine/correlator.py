@@ -43,10 +43,6 @@ _INTERPRETER_SET = {i.lower() for i in config.INTERPRETER_LIST}
 _HOLLOWING_SET   = {h.lower() for h in config.HOLLOWING_TARGETS}
 _NEVER_NET_SET   = {n.lower() for n in config.NEVER_NET_BINARIES}
 
-_RAW_DISK_WHITELIST_SET = {
-    (b.lower() if b.lower().endswith('.exe') else b.lower() + '.exe')
-    for b in config.RAW_DISK_READ_WHITELIST
-}
 _MODULE_LOAD_TIME = datetime.now()   # startup grace period anchor — set once at import
 
 
@@ -120,6 +116,30 @@ def _actor_matches(actor, process_path, name_set):
         if basename in name_set:
             return True
     return False
+
+
+def _is_path_whitelisted(actor, process_path, whitelist):
+    """Path-pinned whitelist check — both process name AND path prefix must match.
+
+    whitelist format: {"process_name.exe": ["path_prefix_1", "path_prefix_2"]}
+    Matching is case-insensitive. Prefix is a startswith check.
+
+    Security invariant: if process_path is empty or None this function always
+    returns False — an unrecorded path cannot be verified, so the process is
+    never suppressed regardless of name. This blocks name-spoofing bypass.
+    """
+    if not actor:
+        return False
+    name = actor.lower()
+    if not name.endswith('.exe'):
+        name += '.exe'
+    prefixes = whitelist.get(name)
+    if not prefixes:
+        return False
+    if not process_path:
+        return False    # path unknown — cannot verify — never suppress
+    path_lower = process_path.lower()
+    return any(path_lower.startswith(p.lower()) for p in prefixes)
 
 
 # ============================================================
@@ -235,6 +255,11 @@ def _rule_21(event):
         severity   = 'CRITICAL'
         confidence = weight
     else:                        # UNKNOWN
+        # Path-pinned whitelist — only applies when path IS recorded.
+        # Unknown-path events bypass this check (helper returns False when
+        # process_path is empty) — name alone is not enough to suppress.
+        if _is_path_whitelisted(event['actor'], event['process_path'], config.BYOI_PATH_WHITELIST):
+            return
         severity   = 'SUSPICIOUS'
         confidence = weight * 0.6
 
@@ -2105,10 +2130,7 @@ def _rule_35(event):
         return
     if event['base_severity'] not in ('CRITICAL', 'SUSPICIOUS'):
         return
-    actor = (event['actor'] or '').lower()
-    if not actor.endswith('.exe'):
-        actor += '.exe'
-    if actor in _RAW_DISK_WHITELIST_SET:
+    if _is_path_whitelisted(event['actor'], event['process_path'], config.RAW_DISK_READ_WHITELIST):
         return
     weight   = config.RULE_WEIGHTS[35]
     severity = event['base_severity']
@@ -2293,6 +2315,12 @@ def _rule_39(event):
     # Pass through collector severity -- SysmonWatcher already distinguished
     # "Image is replaced" (CRITICAL) from "Image is locked" (SUSPICIOUS).
     severity = event['base_severity'] if event['base_severity'] in ('CRITICAL', 'SUSPICIOUS') else 'CRITICAL'
+    # SUSPICIOUS (image locked) only — path-pinned whitelist for known POSIX runtimes.
+    # CRITICAL (image replaced) is confirmed hollowing and is never suppressed.
+    if severity == 'SUSPICIOUS' and _is_path_whitelisted(
+        event['actor'], event['process_path'], config.IMAGE_LOCKED_WHITELIST
+    ):
+        return
     if severity == 'CRITICAL':
         explanation = (
             f"[Rule 39] Process Hollowing Confirmed. "
