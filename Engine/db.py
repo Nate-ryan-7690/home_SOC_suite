@@ -32,6 +32,19 @@ def get_connection():
         conn.close()
 
 
+def _migrate(conn):
+    """Idempotent schema migrations. Each ALTER TABLE is wrapped so a
+    column that already exists does not abort the run."""
+    for stmt in (
+        "ALTER TABLE alerts ADD COLUMN analyst_comment TEXT",
+        "ALTER TABLE alerts ADD COLUMN reviewed_at      TEXT",
+    ):
+        try:
+            conn.execute(stmt)
+        except Exception:
+            pass   # column already exists -- safe to ignore
+
+
 def initialize():
     """Create all tables and indexes if they don't exist.
     Safe to call on every engine startup."""
@@ -124,6 +137,7 @@ def initialize():
             CREATE INDEX IF NOT EXISTS idx_alerts_status
                 ON alerts(status);
         """)
+        _migrate(conn)
 
 
 # ============================================================
@@ -381,6 +395,102 @@ def get_harbinger_events_by_parent(parent_fragment, window_seconds, reference_ti
         """, (cutoff, f'%{parent_fragment}%')).fetchall()
 
 
+def get_harbinger_scripting_spawn_bad_parent(
+    bad_parents, scripting_engines, window_seconds,
+    exclude_cmd_fragment=None, reference_time=None
+):
+    """Return Harbinger PROCESS events where a scripting engine was spawned
+    by a known-bad parent process within window_seconds.
+
+    bad_parents: list of parent names matched case-insensitively against
+                 'Parent: <name>' in the raw log line.
+    scripting_engines: list of child process names matched against actor field.
+    exclude_cmd_fragment: optional -- skip events whose CMD contains this string
+                          (used to exclude the suite launcher).
+
+    Used by Rules 43, 44, 45, 46, 48.
+    """
+    _now   = reference_time or datetime.now()
+    cutoff = (_now - timedelta(seconds=window_seconds)).strftime('%Y-%m-%d %H:%M:%S')
+
+    parent_clauses = " OR ".join(
+        "LOWER(r.raw_payload) LIKE ?" for _ in bad_parents
+    )
+    parent_params = [
+        f"%parent: {p.lower().replace('.exe', '')}%" for p in bad_parents
+    ]
+
+    engine_clauses = " OR ".join(
+        "LOWER(e.actor) LIKE ?" for _ in scripting_engines
+    )
+    engine_params = [
+        f"%{e.lower().replace('.exe', '')}%" for e in scripting_engines
+    ]
+
+    exclude_clause = ""
+    exclude_params = []
+    if exclude_cmd_fragment:
+        exclude_clause = "AND LOWER(r.raw_payload) NOT LIKE ?"
+        exclude_params = [f"%{exclude_cmd_fragment.lower()}%"]
+
+    with get_connection() as conn:
+        return conn.execute(f"""
+            SELECT e.* FROM events e
+            JOIN raw_events r ON r.normalized_event_id = e.event_id
+            WHERE e.collector_name = 'harbinger'
+              AND e.event_type = 'PROCESS'
+              AND e.observed_at >= ?
+              AND ({parent_clauses})
+              AND ({engine_clauses})
+              {exclude_clause}
+        """, [cutoff] + parent_params + engine_params + exclude_params).fetchall()
+
+
+def get_harbinger_obfuscated_cmd(
+    window_seconds, exclude_cmd_fragment=None, reference_time=None
+):
+    """Return Harbinger PROCESS events where the command line contains
+    encoded, hidden, or obfuscated execution flags.
+
+    Triggers (any sufficient):
+      - -EncodedCommand or shorthand -enc
+      - -WindowStyle Hidden combined with -ExecutionPolicy Bypass
+      - -WindowStyle Hidden combined with -NonInteractive and -NoProfile
+
+    exclude_cmd_fragment: skip events whose CMD contains this string
+                          (suite launcher exclusion).
+
+    Used by Rule 47.
+    """
+    _now   = reference_time or datetime.now()
+    cutoff = (_now - timedelta(seconds=window_seconds)).strftime('%Y-%m-%d %H:%M:%S')
+
+    exclude_clause = ""
+    exclude_params = []
+    if exclude_cmd_fragment:
+        exclude_clause = "AND LOWER(r.raw_payload) NOT LIKE ?"
+        exclude_params = [f"%{exclude_cmd_fragment.lower()}%"]
+
+    with get_connection() as conn:
+        return conn.execute(f"""
+            SELECT e.* FROM events e
+            JOIN raw_events r ON r.normalized_event_id = e.event_id
+            WHERE e.collector_name = 'harbinger'
+              AND e.event_type = 'PROCESS'
+              AND e.observed_at >= ?
+              AND (
+                  LOWER(r.raw_payload) LIKE '%-encodedcommand%'
+                  OR LOWER(r.raw_payload) LIKE '% -enc %'
+                  OR (    LOWER(r.raw_payload) LIKE '%-windowstyle hidden%'
+                      AND LOWER(r.raw_payload) LIKE '%-executionpolicy bypass%')
+                  OR (    LOWER(r.raw_payload) LIKE '%-windowstyle hidden%'
+                      AND LOWER(r.raw_payload) LIKE '%-noninteractive%'
+                      AND LOWER(r.raw_payload) LIKE '%-noprofile%')
+              )
+              {exclude_clause}
+        """, [cutoff] + exclude_params).fetchall()
+
+
 # ============================================================
 # DETECTIONS
 # ============================================================
@@ -435,6 +545,32 @@ def update_alert_status(alert_id, status):
         conn.execute(
             "UPDATE alerts SET status = ?, updated_at = ? WHERE alert_id = ?",
             (status, datetime.now().isoformat(), alert_id),
+        )
+
+
+def get_alert_by_id(alert_id):
+    """Return a single alert row by its ID, or None if not found."""
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM alerts WHERE alert_id = ?",
+            (alert_id,)
+        ).fetchone()
+
+
+def update_alert_classify(alert_id, status, analyst_comment=None):
+    """Set analyst classification (RESOLVED / FALSE_POSITIVE / MONITOR).
+    Records reviewed_at timestamp and optional analyst comment.
+    COALESCE ensures a None comment does not overwrite an existing one."""
+    now = datetime.now().isoformat()
+    with get_connection() as conn:
+        conn.execute(
+            """UPDATE alerts
+               SET status          = ?,
+                   analyst_comment = COALESCE(?, analyst_comment),
+                   reviewed_at     = ?,
+                   updated_at      = ?
+               WHERE alert_id      = ?""",
+            (status, analyst_comment, now, now, alert_id),
         )
 
 

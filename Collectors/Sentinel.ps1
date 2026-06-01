@@ -53,7 +53,7 @@ if (Test-Path $LogFile) {
     $LogAge = (Get-Item $LogFile).CreationTime
     if ($LogAge -lt (Get-Date).AddDays(-7)) {
         if (-not (Test-Path $ArchiveFolder)) { New-Item -ItemType Directory -Path $ArchiveFolder }
-        $ArchiveName = "Sentinel_Archive_$(Get-Date -Format 'yyyy-MM-dd').txt"
+        $ArchiveName = "Network_Watchdog_Archived_$(Get-Date -Format 'yyyy-MM-dd').txt"
         Move-Item -Path $LogFile -Destination "$ArchiveFolder\$ArchiveName"
         Write-Host " [!] Old log moved to Archives folder." -ForegroundColor Yellow
     }

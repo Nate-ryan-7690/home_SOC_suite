@@ -4,8 +4,10 @@
 // ============================================================
 
 const SESSION_START    = new Date();
-let   sessionAlertCount = 0;
-let   knownAlertIds     = new Set();
+let   sessionAlertCount    = 0;
+let   sessionReviewedCount = 0;
+let   knownAlertIds        = new Set();
+let   currentAlertId       = null;
 
 // Maps health_db collector_name → dot ID suffix (script filename)
 const HEARTBEAT_TO_DOT = {
@@ -44,6 +46,11 @@ document.addEventListener("DOMContentLoaded", () => {
     setInterval(refreshSentinel, 5000);    // 5s — SQLite
     setInterval(refreshAlerts,   5000);    // 5s — SQLite
     setInterval(refreshQuiet,    5000);    // 5s — SQLite
+
+    // Close modal when clicking outside the modal box
+    document.getElementById("review-modal-overlay").addEventListener("click", e => {
+        if (e.target === document.getElementById("review-modal-overlay")) closeModal();
+    });
 });
 
 
@@ -226,13 +233,24 @@ function refreshAlerts() {
             }
 
             setEl("alert-feed", rows.map(a => {
-                const sev  = a.severity_current || "UNKNOWN";
-                const conf = Math.round((a.confidence || 0) * 100);
+                const sev        = a.severity_current || "UNKNOWN";
+                const conf       = Math.round((a.confidence || 0) * 100);
+                const isMonitor  = a.status === "MONITOR";
+                const isReviewed = !!a.reviewed_at;
+                const monClass   = isMonitor  ? " monitor" : "";
+                const revIcon    = isReviewed
+                    ? ' <span class="reviewed-icon" title="Reviewed">&#x270E;</span>' : "";
+                const monTag     = isMonitor
+                    ? '<span class="monitor-tag">[MONITOR]</span>' : "";
                 return `
-                <div class="alert-row ${sev}">
+                <div class="alert-row ${sev}${monClass}"
+                     data-alert-id="${a.alert_id}"
+                     onclick="openAlertModal('${a.alert_id}')"
+                     style="cursor:pointer">
                     <div class="alert-meta">
                         <span class="alert-sev ${sev}">${sev}</span>
-                        <span class="alert-rule">Rule ${a.rule_id}</span>
+                        <span class="alert-rule">Rule ${a.rule_id}${revIcon}</span>
+                        ${monTag}
                         <span class="alert-conf">${conf}%</span>
                         <span class="alert-time">${shortTime(a.created_at)}</span>
                     </div>
@@ -381,6 +399,89 @@ async function runWeekly() {
         `Weekly reports run at ${data.timestamp} — ${data.launched.join(", ")}`;
     setAuditorMsg("Weekly reports complete.", "#8f8");
     btn.disabled = false;
+}
+
+
+// ============================================================
+// ALERT REVIEW MODAL
+// ============================================================
+function openAlertModal(alertId) {
+    currentAlertId = alertId;
+    fetch(`/api/alert/${alertId}`)
+        .then(r => r.json())
+        .then(a => {
+            const sev  = a.severity_current || "UNKNOWN";
+            const conf = Math.round((a.confidence || 0) * 100);
+
+            const sevEl = document.getElementById("modal-sev");
+            sevEl.textContent = sev;
+            sevEl.className   = "alert-sev " + sev;
+            document.getElementById("modal-rule").textContent = "Rule " + a.rule_id;
+            document.getElementById("modal-conf").textContent = conf + "%";
+            document.getElementById("modal-explanation").textContent = a.explanation || "";
+
+            const priorEl = document.getElementById("modal-prior");
+            if (a.reviewed_at) {
+                document.getElementById("modal-prior-status").textContent = a.status;
+                document.getElementById("modal-prior-time").textContent =
+                    "Last reviewed: " + shortTime(a.reviewed_at);
+                priorEl.style.display = "";
+                document.getElementById("modal-comment").value = a.analyst_comment || "";
+            } else {
+                priorEl.style.display = "none";
+                document.getElementById("modal-comment").value = "";
+            }
+
+            document.getElementById("review-modal-overlay").style.display = "flex";
+        })
+        .catch(() => {});
+}
+
+
+function closeModal() {
+    document.getElementById("review-modal-overlay").style.display = "none";
+    currentAlertId = null;
+}
+
+
+function classifyAlert(status) {
+    if (!currentAlertId) return;
+    const comment = document.getElementById("modal-comment").value.trim() || null;
+
+    fetch(`/api/alert/${currentAlertId}/classify`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ status, analyst_comment: comment })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (!data.ok) return;
+
+        sessionReviewedCount++;
+        document.getElementById("reviewed-count").textContent = sessionReviewedCount;
+
+        const row = document.querySelector(`[data-alert-id="${currentAlertId}"]`);
+        if (row) {
+            if (status === "RESOLVED" || status === "FALSE_POSITIVE") {
+                row.remove();
+            } else if (status === "MONITOR") {
+                row.classList.add("monitor");
+                const ruleEl = row.querySelector(".alert-rule");
+                if (ruleEl && !ruleEl.querySelector(".reviewed-icon")) {
+                    ruleEl.insertAdjacentHTML("beforeend",
+                        ' <span class="reviewed-icon" title="Reviewed">&#x270E;</span>');
+                }
+                const meta = row.querySelector(".alert-meta");
+                if (meta && !meta.querySelector(".monitor-tag")) {
+                    const confEl = meta.querySelector(".alert-conf");
+                    confEl.insertAdjacentHTML("beforebegin",
+                        '<span class="monitor-tag">[MONITOR]</span>');
+                }
+            }
+        }
+        closeModal();
+    })
+    .catch(() => {});
 }
 
 

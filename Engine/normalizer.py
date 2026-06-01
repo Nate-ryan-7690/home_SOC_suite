@@ -81,9 +81,9 @@ STEWARD_SYS_RAM_RE = re.compile(r'^HIGH RAM: (.+?) at ([\d\.]+)%$')
 # --- CityGuard (CONFIRMED — test_parser.py uses this exact format) ---
 # NEW TASK: \Temp\evil.exe | Action: C:\Temp\evil.exe
 # TASK DELETED: \TaskName
-# TASK MODIFIED: \TaskName | Old Action: ... | New Action: ...
+# MODIFIED TASK: \TaskName | Old Action: ... | New Action: ...
 CITYGUARD_RE = re.compile(
-    r'^(NEW TASK|TASK DELETED|TASK MODIFIED): (.+?)(?:\s*\|.*)?$'
+    r'^(NEW TASK|TASK DELETED|MODIFIED TASK): (.+?)(?:\s*\|.*)?$'
 )
 CITYGUARD_ACTION_RE = re.compile(r'Action: (.+?)(?:\s*\||$)')
 
@@ -104,7 +104,7 @@ _WATCHMAN_SUBTYPES = {
 
 # --- Registry_Warden (INFERRED — skeleton not yet complete) ---
 REGISTRY_RE = re.compile(
-    r'^(NEW VALUE|DELETED VALUE|MODIFIED VALUE|NEW KEY|DELETED KEY): (.+?)(?:\s*\|.*)?$'
+    r'^(NEW RUN ENTRY|REMOVED RUN ENTRY|MODIFIED RUN ENTRY|SERVICE PATH CHANGED)(?:\s*\[[^\]]+\])?: (.+?)(?:\s*\|.*)?$'
 )
 
 # --- SecEventLog (CONFIRMED against SecEventLog.ps1 source) ---

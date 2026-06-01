@@ -311,7 +311,7 @@ BRUTE_FORCE_IP_THRESHOLD   = 10
 # Rotate periodically — a threshold-aware adversary paces
 # connections just below this value.
 # ============================================================
-BURST_CONNECTION_THRESHOLD = 3
+BURST_CONNECTION_THRESHOLD = 5
 
 # ============================================================
 # C2 BEACON THRESHOLD — Rule 2
@@ -322,7 +322,7 @@ BURST_CONNECTION_THRESHOLD = 3
 # alerting — routine update checks are frequent.
 # Rotate periodically.
 # ============================================================
-C2_BEACON_MIN_SESSIONS = 3
+C2_BEACON_MIN_SESSIONS = 6
 
 # ============================================================
 # ENGINE HEALTH — Rule 18
@@ -336,7 +336,7 @@ C2_BEACON_MIN_SESSIONS = 3
 COLLECTOR_SILENCE_THRESHOLD  = 1800   # 30 minutes — log event silence threshold
 HEARTBEAT_SILENCE_THRESHOLD  = 60    # seconds — heartbeat writes every 5s, gap >60s = process dead
 HEARTBEAT_RETENTION_HOURS    = 48    # hours — collector_heartbeats history retained in health.db
-ENGINE_FLOOD_THRESHOLD       = 50    # alerts per 60 seconds
+ENGINE_FLOOD_THRESHOLD       = 500   # DEV: raised -- no machine-specific whitelists active
 STARTUP_GRACE_SECONDS        = 120   # seconds after engine start before Rules 41/42 can fire
 
 # ============================================================

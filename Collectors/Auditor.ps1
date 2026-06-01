@@ -55,11 +55,16 @@ $ReportFile       = "$ReportFolder\Auditor_${RunTimestamp}_${Mode}.txt"
 $LogLinePattern   = '^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] \[(OK|UNKNOWN|SUSPICIOUS|CRITICAL)\] '
 $LogHeaderPattern = '^---'
 
+# Log files that use a different format and are excluded from format validation
+# Engine_Log.txt and Alert_Log.txt use the Python engine format (UTC timestamp, MEDIUM severity)
+$FormatCheckExclude = @("Engine_Log.txt", "Alert_Log.txt")
+
 # All scripts that should be stopped before running Auditor
 $CollectorNames = @(
     "Sentinel.ps1", "Bulwark.ps1", "Steward.ps1", "CITYGUARD.ps1",
     "Watchman.ps1", "Registry_Warden.ps1", "Harbinger.ps1",
-    "Bloodhound.ps1", "Warden.ps1"
+    "Bloodhound.ps1", "DOH_Detector.ps1", "SecEventLog.ps1",
+    "SysmonWatcher.ps1", "Warden.ps1"
 )
 
 # ============================================================
@@ -109,11 +114,14 @@ function Test-CollectorStatus {
 
 function Test-LogLineFormat($LogPath) {
     # Returns count of format violations and up to 5 examples
+    # Caps at $MaxLines to guard against very large log files (e.g. SysmonWatcher)
     $Violations = @()
     $LineNum    = 0
+    $MaxLines   = 10000
     try {
         foreach ($Line in [System.IO.File]::ReadLines($LogPath)) {
             $LineNum++
+            if ($LineNum -gt $MaxLines) { break }
             if ([string]::IsNullOrWhiteSpace($Line)) { continue }
             if ($Line -match $LogHeaderPattern)       { continue }
             if ($Line -notmatch $LogLinePattern) {
@@ -199,12 +207,12 @@ function Load-ArchiveChain {
                 chain_hash      = $Entry.chain_hash
             }
         }
-        return $Chain
+        return ,$Chain
     } catch { return @() }
 }
 
 function Save-ArchiveChain($Chain) {
-    @{ chain = $Chain } | ConvertTo-Json -Depth 4 | Out-File $ChainFile -Encoding UTF8
+    @{ chain = @($Chain) } | ConvertTo-Json -Depth 4 | Out-File $ChainFile -Encoding UTF8
 }
 
 function Test-ArchiveChain($Chain) {
@@ -316,6 +324,7 @@ $FormatViolTotal = 0
 $FilesChecked    = 0
 
 foreach ($LF in $LogFiles) {
+    if ($FormatCheckExclude -contains $LF.Name) { continue }
     $Result = Test-LogLineFormat $LF.FullName
     $FilesChecked++
     if ($Result.Count -gt 0) {

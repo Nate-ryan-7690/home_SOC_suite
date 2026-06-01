@@ -15,7 +15,7 @@ import json
 import sqlite3
 import subprocess
 from datetime import datetime
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
 
@@ -33,12 +33,13 @@ PWSH          = os.path.join(os.path.expanduser("~"), "AppData", "Local",
                              "Microsoft", "WindowsApps", "pwsh.exe")
 
 # Dashboard port — change if 5000 is already in use on your machine
-DASHBOARD_PORT = 5000
+DASHBOARD_PORT = 7001
 
 # ============================================================
 # DERIVED PATHS — do not edit below unless structure changed
 # ============================================================
 DB_PATH                     = os.path.join(ROOT_PATH, "Engine", "hocsoc.db")
+ANALYST_DB_PATH             = os.path.join(ROOT_PATH, "Dashboard", "analyst.db")
 SCRIPTS_PATH                = os.path.join(ROOT_PATH, "Scripts")
 LOG_PATH                    = os.path.join(ROOT_PATH, "Logs")
 CONFIG_PATH                 = os.path.join(ROOT_PATH, "Config")
@@ -127,6 +128,49 @@ def db_query(sql, params=()):
         return [dict(r) for r in rows]
     except Exception:
         return []
+
+
+def analyst_query(sql, params=()):
+    """Read from analyst.db. Returns list of dicts, [] if unavailable."""
+    try:
+        conn = sqlite3.connect(ANALYST_DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(sql, params).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def analyst_write(sql, params=()):
+    """Write to analyst.db only. hocsoc.db is never modified by the dashboard."""
+    try:
+        conn = sqlite3.connect(ANALYST_DB_PATH)
+        conn.execute(sql, params)
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
+def analyst_db_init():
+    """Create analyst.db and classifications table on first run."""
+    try:
+        conn = sqlite3.connect(ANALYST_DB_PATH)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS classifications (
+                alert_id        TEXT PRIMARY KEY,
+                status          TEXT NOT NULL DEFAULT 'NEW',
+                analyst_comment TEXT,
+                reviewed_at     TEXT,
+                updated_at      TEXT
+            )
+        """)
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 
 # ============================================================
@@ -254,15 +298,81 @@ def api_sentinel():
 
 @app.route("/api/alerts")
 def api_alerts():
-    """Last 20 engine alerts for scrollable feed. Called every 60s."""
+    """Active alerts for feed. Excludes RESOLVED and FALSE_POSITIVE.
+    Merges hocsoc.db alert data with analyst.db classifications."""
     rows = db_query("""
         SELECT alert_id, rule_id, severity_current,
                confidence, explanation, created_at
         FROM   alerts
         ORDER  BY created_at DESC
-        LIMIT  20
+        LIMIT  50
     """)
-    return jsonify(rows)
+    if not rows:
+        return jsonify([])
+    ids = [r["alert_id"] for r in rows]
+    placeholders = ",".join("?" * len(ids))
+    classes = analyst_query(
+        f"SELECT * FROM classifications WHERE alert_id IN ({placeholders})",
+        tuple(ids)
+    )
+    class_map = {c["alert_id"]: c for c in classes}
+    result = []
+    for row in rows:
+        cls = class_map.get(row["alert_id"], {})
+        status = cls.get("status", "NEW")
+        if status in ("RESOLVED", "FALSE_POSITIVE"):
+            continue
+        row["status"]          = status
+        row["analyst_comment"] = cls.get("analyst_comment")
+        row["reviewed_at"]     = cls.get("reviewed_at")
+        result.append(row)
+    return jsonify(result[:20])
+
+
+@app.route("/api/alert/<alert_id>")
+def api_alert_detail(alert_id):
+    """Full detail for a single alert including analyst classification.
+    Used by the review modal."""
+    rows = db_query(
+        "SELECT alert_id, rule_id, severity_current, confidence, explanation, created_at "
+        "FROM alerts WHERE alert_id = ?",
+        (alert_id,)
+    )
+    if not rows:
+        return jsonify({"error": "not found"}), 404
+    row = rows[0]
+    cls_rows = analyst_query(
+        "SELECT * FROM classifications WHERE alert_id = ?", (alert_id,)
+    )
+    cls = cls_rows[0] if cls_rows else {}
+    row["status"]          = cls.get("status", "NEW")
+    row["analyst_comment"] = cls.get("analyst_comment")
+    row["reviewed_at"]     = cls.get("reviewed_at")
+    return jsonify(row)
+
+
+@app.route("/api/alert/<alert_id>/classify", methods=["POST"])
+def api_alert_classify(alert_id):
+    """Write analyst classification to analyst.db. hocsoc.db is not touched.
+    Body: {"status": "RESOLVED|FALSE_POSITIVE|MONITOR", "analyst_comment": "..."}"""
+    body    = request.get_json(silent=True) or {}
+    status  = body.get("status", "").upper()
+    comment = body.get("analyst_comment") or None
+    if status not in ("RESOLVED", "FALSE_POSITIVE", "MONITOR"):
+        return jsonify({"ok": False, "error": "invalid status"}), 400
+    now = datetime.now().isoformat()
+    ok = analyst_write(
+        """INSERT INTO classifications
+               (alert_id, status, analyst_comment, reviewed_at, updated_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(alert_id) DO UPDATE SET
+               status          = excluded.status,
+               analyst_comment = COALESCE(excluded.analyst_comment, analyst_comment),
+               reviewed_at     = excluded.reviewed_at,
+               updated_at      = excluded.updated_at""",
+        (alert_id, status, comment, now, now)
+    )
+    return jsonify({"ok": ok})
 
 
 @app.route("/api/quiet")
@@ -394,4 +504,5 @@ def shutdown():
 # MAIN
 # ============================================================
 if __name__ == "__main__":
+    analyst_db_init()
     app.run(host="127.0.0.1", port=DASHBOARD_PORT, debug=False, threaded=True)

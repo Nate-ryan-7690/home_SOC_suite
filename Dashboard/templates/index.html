@@ -12,6 +12,7 @@
     <div id="suite-name">Night's Watch SOC</div>
     <div id="session-info">Session: <span id="session-start"></span></div>
     <div id="alert-counter">Alerts this session: <span id="alert-count">0</span></div>
+    <div id="reviewed-counter">Reviewed: <span id="reviewed-count">0</span></div>
 </header>
 
 <!-- CONTROLS -->
@@ -175,6 +176,37 @@
 
 <!-- WEEKLY REPORTS STATUS -->
 <div id="weekly-status"></div>
+
+<!-- REVIEW MODAL -->
+<div id="review-modal-overlay" class="modal-overlay" style="display:none;">
+    <div id="review-modal" class="modal">
+        <div class="modal-header">
+            <span id="modal-sev" class="alert-sev"></span>
+            <span id="modal-rule" class="modal-rule-label"></span>
+            <span id="modal-conf" class="modal-conf-label"></span>
+        </div>
+        <div class="modal-body">
+            <div id="modal-explanation" class="modal-explanation"></div>
+            <div id="modal-prior" class="modal-prior" style="display:none;">
+                <span class="modal-reviewed-icon">&#x270E;</span>
+                <span id="modal-prior-status"></span>
+                <span id="modal-prior-time" class="modal-prior-time"></span>
+            </div>
+            <textarea id="modal-comment" class="modal-comment"
+                      placeholder="Analyst note (optional)..."></textarea>
+        </div>
+        <div class="modal-actions">
+            <button class="modal-btn btn-resolve"
+                    onclick="classifyAlert('RESOLVED')">Resolve</button>
+            <button class="modal-btn btn-fp"
+                    onclick="classifyAlert('FALSE_POSITIVE')">False Positive</button>
+            <button class="modal-btn btn-monitor"
+                    onclick="classifyAlert('MONITOR')">Monitor</button>
+            <button class="modal-btn btn-cancel"
+                    onclick="closeModal()">Cancel</button>
+        </div>
+    </div>
+</div>
 
 <script src="/static/dashboard.js"></script>
 </body>

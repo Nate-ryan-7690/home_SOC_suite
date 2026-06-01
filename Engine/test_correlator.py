@@ -1822,7 +1822,7 @@ db.initialize()
 _insert_event(
     event_id='r22_sync', event_type='NETWORK', subtype='OUTBOUND',
     actor='onedrive',
-    process_path=r'C:\Users\Schüler\AppData\Local\Microsoft\OneDrive\OneDrive.exe',
+    process_path=r'C:\Users\TestUser\AppData\Local\Microsoft\OneDrive\OneDrive.exe',
     destination='13.107.42.14',
     base_severity='CRITICAL', trust_level='HIGH_RISK',
     collector='sentinel', observed_at=_R22_AFTER,
@@ -2752,7 +2752,7 @@ db.initialize()
 
 _insert_event(
     event_id='r29_fire', event_type='PROCESS', subtype='HIGH_RISK_LAUNCH',
-    actor='payload.exe', process_path=r'C:\Users\Schüler\Downloads\payload.exe',
+    actor='payload.exe', process_path=r'C:\Users\TestUser\Downloads\payload.exe',
     destination=None,
     base_severity='CRITICAL', trust_level='HIGH_RISK',
     collector='sysmonwatcher',
@@ -2778,7 +2778,7 @@ db.initialize()
 
 _insert_event(
     event_id='r29_nofire', event_type='PROCESS', subtype='HIGH_RISK_LAUNCH',
-    actor='installer.exe', process_path=r'C:\Users\Schüler\Downloads\installer.exe',
+    actor='installer.exe', process_path=r'C:\Users\TestUser\Downloads\installer.exe',
     destination=None,
     base_severity='OK', trust_level='TRUSTED',
     collector='sysmonwatcher',
@@ -2870,7 +2870,7 @@ db.initialize()
 
 _insert_event(
     event_id='r31_userpath', event_type='DLL', subtype='DLL_USERPATH',
-    actor='someapp.exe', process_path=r'C:\Users\Schüler\AppData\Roaming\someapp\helper.dll',
+    actor='someapp.exe', process_path=r'C:\Users\TestUser\AppData\Roaming\someapp\helper.dll',
     destination=None,
     base_severity='SUSPICIOUS', trust_level='UNKNOWN',
     collector='sysmonwatcher',
@@ -2895,7 +2895,7 @@ db.initialize()
 
 _insert_event(
     event_id='r32_binding', event_type='WMI', subtype='WMI_BINDING',
-    actor='NBDA0665\\Schüler', process_path=None,
+    actor='TESTPC\\TestUser', process_path=None,
     destination=None,
     base_severity='CRITICAL', trust_level='UNKNOWN',
     collector='sysmonwatcher',
@@ -3182,7 +3182,7 @@ db.initialize()
 
 _insert_event(
     event_id='r38_exec', event_type='FILE', subtype='EXECUTABLE_CREATED',
-    actor='chrome.exe', process_path=r'C:\Users\Schüler\Downloads\evil.exe',
+    actor='chrome.exe', process_path=r'C:\Users\TestUser\Downloads\evil.exe',
     destination=None,
     base_severity='CRITICAL', trust_level='HIGH_RISK',
     collector='sysmonwatcher',
@@ -3208,7 +3208,7 @@ db.initialize()
 
 _insert_event(
     event_id='r38_zone', event_type='FILE', subtype='ZONE_IDENTIFIER',
-    actor='browser.exe', process_path=r'C:\Users\Schüler\Downloads\setup.exe',
+    actor='browser.exe', process_path=r'C:\Users\TestUser\Downloads\setup.exe',
     destination=None,
     base_severity='SUSPICIOUS', trust_level='UNKNOWN',
     collector='sysmonwatcher',
@@ -3270,5 +3270,492 @@ assert db.count_alerts() == 0, f'Expected 0 alerts, got {db.count_alerts()}'
 print('  no alert for PROCESS_TERMINATED (wrong subtype)  PASS')
 
 
+
+
+# ============================================================
+# TESTS 118-121: Rules 41 and 42 -- Blind Window & Coordinated Suppression
+# ============================================================
+
+_R41_EVT = '2026-03-21 08:00:00'
+_R41_REF = _dt(2026, 3, 21, 8, 5, 0)   # 5 min after -> inside SHORT_WINDOW
+_R42_REF = _dt(2026, 3, 21, 9, 0, 0)
+
+
+def _reset_dbs():
+    """Drop and re-initialise both operational and health databases."""
+    if os.path.exists('hocsoc.db'):
+        os.remove('hocsoc.db')
+    if os.path.exists('hocsoc_health.db'):
+        os.remove('hocsoc_health.db')
+    db.initialize()
+    health_db.initialize()
+
+
+# -------------------------------------------------------
+# Test 118: Rule 41 fires -- NETWORK_BLIND_PROCESS
+#   Sentinel DOWN + Harbinger reports a SUSPICIOUS process in the gap
+# -------------------------------------------------------
+print('Test 118: Rule 41 CRITICAL on Sentinel DOWN + Harbinger SUSPICIOUS process...')
+_reset_dbs()
+
+health_db.upsert_collector_status(
+    collector_name='sentinel', heartbeat_ts=None,
+    last_recorded=_R41_REF, cycle=1, uptime=0, status='DOWN',
+)
+_insert_event(
+    event_id='r41_proc', event_type='PROCESS', subtype='NEW PROCESS',
+    actor='payload.exe',
+    process_path=r'C:\Windows\Temp\payload.exe',
+    destination=None,
+    base_severity='SUSPICIOUS', trust_level='HIGH_RISK',
+    collector='harbinger', observed_at=_R41_EVT,
+)
+correlator._rule_41(reference_time=_R41_REF)
+conn = sqlite3.connect('hocsoc.db')
+conn.row_factory = sqlite3.Row
+_a118 = conn.execute("SELECT * FROM alerts WHERE rule_id=41").fetchall()
+conn.close()
+assert len(_a118) == 1, f'Expected 1 alert (NETWORK_BLIND_PROCESS), got {len(_a118)}'
+assert _a118[0]['severity_current'] == 'CRITICAL'
+assert 'NETWORK_BLIND_PROCESS' in _a118[0]['explanation']
+print('  CRITICAL NETWORK_BLIND_PROCESS alert  PASS')
+
+
+# -------------------------------------------------------
+# Test 119: Rule 41 no-fire -- no collectors are DOWN
+# -------------------------------------------------------
+print('Test 119: Rule 41 no-fire when no collectors are DOWN...')
+_reset_dbs()
+
+_insert_event(
+    event_id='r41_no_down', event_type='PROCESS', subtype='NEW PROCESS',
+    actor='payload.exe', process_path=r'C:\Windows\Temp\payload.exe',
+    destination=None, base_severity='SUSPICIOUS', trust_level='HIGH_RISK',
+    collector='harbinger', observed_at=_R41_EVT,
+)
+# health_db is empty -> no DOWN collectors recorded
+correlator._rule_41(reference_time=_R41_REF)
+assert db.count_alerts() == 0, f'Expected 0 alerts (no DOWN collectors), got {db.count_alerts()}'
+print('  no alert -- no DOWN collectors  PASS')
+
+
+# -------------------------------------------------------
+# Test 120: Rule 42 fires -- 2 collectors simultaneously DOWN
+# -------------------------------------------------------
+print('Test 120: Rule 42 CRITICAL on 2 collectors simultaneously DOWN...')
+_reset_dbs()
+
+for _cname in ('sentinel', 'bulwark'):
+    health_db.upsert_collector_status(
+        collector_name=_cname, heartbeat_ts=None,
+        last_recorded=_R42_REF, cycle=1, uptime=0, status='DOWN',
+    )
+correlator._rule_42(reference_time=_R42_REF)
+conn = sqlite3.connect('hocsoc.db')
+conn.row_factory = sqlite3.Row
+_a120 = conn.execute("SELECT * FROM alerts WHERE rule_id=42").fetchall()
+conn.close()
+assert len(_a120) == 1, f'Expected 1 alert, got {len(_a120)}'
+assert _a120[0]['severity_current'] == 'CRITICAL'
+assert 'COORDINATED_SUPPRESSION' in _a120[0]['explanation']
+print('  CRITICAL COORDINATED_SUPPRESSION alert  PASS')
+
+
+# -------------------------------------------------------
+# Test 121: Rule 42 no-fire -- only 1 collector DOWN
+# -------------------------------------------------------
+print('Test 121: Rule 42 no-fire when only 1 collector is DOWN...')
+_reset_dbs()
+
+health_db.upsert_collector_status(
+    collector_name='sentinel', heartbeat_ts=None,
+    last_recorded=_R42_REF, cycle=1, uptime=0, status='DOWN',
+)
+correlator._rule_42(reference_time=_R42_REF)
+assert db.count_alerts() == 0, f'Expected 0 alerts (only 1 DOWN), got {db.count_alerts()}'
+print('  no alert -- only 1 collector DOWN  PASS')
+
+
+# ============================================================
+# TESTS 122-135: Rules 43-48 -- Supply-Chain Spawn Detection
+# ============================================================
+
+_R43_EVT = '2026-03-22 09:00:00'
+_R43_REF = _dt(2026, 3, 22, 9, 5, 0)   # 5 min after -> inside SHORT_WINDOW
+
+
+def _insert_harbinger_spawn(event_id, actor, process_path, trust_level,
+                             base_severity, parent_name, cmd='',
+                             observed_at=_R43_EVT):
+    """Insert a Harbinger PROCESS event plus the raw_events row needed for
+    parent/CMD matching via the JOIN used by Rules 43-48."""
+    _insert_event(
+        event_id=event_id, event_type='PROCESS', subtype='NEW PROCESS',
+        actor=actor, process_path=process_path, destination=None,
+        base_severity=base_severity, trust_level=trust_level,
+        collector='harbinger', observed_at=observed_at,
+    )
+    raw_line = (
+        f'[{observed_at}] [{base_severity}] NEW PROCESS: {actor} | PID: 9999 | '
+        f'Parent: {parent_name} (1234) | Path: {process_path or ""} | CMD: {cmd}'
+    )
+    conn = sqlite3.connect('hocsoc.db')
+    conn.execute("""
+        INSERT OR IGNORE INTO raw_events
+            (collector_name, raw_payload, observed_at, recorded_at,
+             source_host, raw_event_hash, normalized_event_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, ('harbinger', raw_line, observed_at, observed_at,
+          'TEST-HOST', f'rawhash_{event_id}', event_id))
+    conn.commit()
+    conn.close()
+
+
+# -------------------------------------------------------
+# Test 122: Rule 43 fires -- chrome spawns powershell (SUSPICIOUS)
+# -------------------------------------------------------
+print('Test 122: Rule 43 SUSPICIOUS on chrome spawning powershell...')
+_reset_dbs()
+
+_insert_harbinger_spawn(
+    event_id='r43_fire',
+    actor='powershell.exe',
+    process_path=r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
+    trust_level='TRUSTED',
+    base_severity='SUSPICIOUS',
+    parent_name='chrome',
+)
+correlator._rule_43(reference_time=_R43_REF)
+conn = sqlite3.connect('hocsoc.db')
+conn.row_factory = sqlite3.Row
+_a122 = conn.execute("SELECT * FROM alerts WHERE rule_id=43").fetchall()
+conn.close()
+assert len(_a122) == 1, f'Expected 1 alert, got {len(_a122)}'
+assert _a122[0]['severity_current'] == 'SUSPICIOUS'
+assert 'scripting engine' in _a122[0]['explanation']
+print('  SUSPICIOUS alert, scripting engine in explanation  PASS')
+
+
+# -------------------------------------------------------
+# Test 123: Rule 43 no-fire -- suite launcher CMD fragment excluded
+#   node IS in KNOWN_BAD_PARENTS, but CMD contains the suite launcher path
+# -------------------------------------------------------
+print('Test 123: Rule 43 no-fire when CMD contains suite launcher fragment...')
+_reset_dbs()
+
+_launcher_cmd = (
+    r'pwsh.exe -ExecutionPolicy Bypass -WindowStyle Hidden '
+    r'-File "C:\Users\Schuler\Desktop\SOC\Scripts\\Collectors\Sentinel.ps1"'
+)
+_insert_harbinger_spawn(
+    event_id='r43_launcher',
+    actor='pwsh.exe',
+    process_path=r'C:\Program Files\PowerShell\7\pwsh.exe',
+    trust_level='TRUSTED',
+    base_severity='OK',
+    parent_name='node',          # node IS in KNOWN_BAD_PARENTS
+    cmd=_launcher_cmd,
+)
+correlator._rule_43(reference_time=_R43_REF)
+assert db.count_alerts() == 0, (
+    f'Expected 0 alerts (suite launcher excluded), got {db.count_alerts()}'
+)
+print('  no alert -- suite launcher CMD fragment excluded  PASS')
+
+
+# -------------------------------------------------------
+# Test 124: Rule 43 no-fire -- non-bad parent (explorer is not in KNOWN_BAD_PARENTS)
+# -------------------------------------------------------
+print('Test 124: Rule 43 no-fire when parent is not in KNOWN_BAD_PARENTS...')
+_reset_dbs()
+
+_insert_harbinger_spawn(
+    event_id='r43_nofire_parent',
+    actor='powershell.exe',
+    process_path=r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
+    trust_level='TRUSTED',
+    base_severity='OK',
+    parent_name='explorer',      # explorer NOT in KNOWN_BAD_PARENTS
+)
+correlator._rule_43(reference_time=_R43_REF)
+assert db.count_alerts() == 0, (
+    f'Expected 0 alerts (explorer not a bad parent), got {db.count_alerts()}'
+)
+print('  no alert -- explorer not in KNOWN_BAD_PARENTS  PASS')
+
+
+# -------------------------------------------------------
+# Test 125: Rule 44 fires -- node spawns python from HIGH_RISK path (HIGH)
+# -------------------------------------------------------
+print('Test 125: Rule 44 HIGH on node spawning python from HIGH_RISK path...')
+_reset_dbs()
+
+_insert_harbinger_spawn(
+    event_id='r44_fire',
+    actor='python.exe',
+    process_path=os.path.join(appdata_temp, 'python.exe'),
+    trust_level='HIGH_RISK',
+    base_severity='CRITICAL',
+    parent_name='node',
+)
+correlator._rule_44(reference_time=_R43_REF)
+conn = sqlite3.connect('hocsoc.db')
+conn.row_factory = sqlite3.Row
+_a125 = conn.execute("SELECT * FROM alerts WHERE rule_id=44").fetchall()
+conn.close()
+assert len(_a125) == 1, f'Expected 1 alert, got {len(_a125)}'
+assert _a125[0]['severity_current'] == 'HIGH'
+assert 'high-risk path' in _a125[0]['explanation']
+print('  HIGH alert, high-risk path in explanation  PASS')
+
+
+# -------------------------------------------------------
+# Test 126: Rule 44 no-fire -- spawn from trusted path (trust_level not HIGH_RISK)
+# -------------------------------------------------------
+print('Test 126: Rule 44 no-fire when spawn path is trusted...')
+_reset_dbs()
+
+_insert_harbinger_spawn(
+    event_id='r44_nofire_trusted',
+    actor='powershell.exe',
+    process_path=r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
+    trust_level='TRUSTED',       # NOT HIGH_RISK -> Rule 44 should not fire
+    base_severity='SUSPICIOUS',
+    parent_name='chrome',
+)
+correlator._rule_44(reference_time=_R43_REF)
+assert db.count_alerts() == 0, (
+    f'Expected 0 alerts (trust_level TRUSTED, not HIGH_RISK), got {db.count_alerts()}'
+)
+print('  no rule-44 alert -- trust_level TRUSTED is not HIGH_RISK  PASS')
+
+
+# -------------------------------------------------------
+# Test 127: Rule 45 fires -- chrome->powershell + powershell outbound callback (CRITICAL)
+# -------------------------------------------------------
+print('Test 127: Rule 45 CRITICAL on bad-parent spawn + matching outbound network...')
+_reset_dbs()
+
+_insert_harbinger_spawn(
+    event_id='r45_proc',
+    actor='powershell.exe',
+    process_path=r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
+    trust_level='TRUSTED',
+    base_severity='SUSPICIOUS',
+    parent_name='chrome',
+)
+_insert_event(
+    event_id='r45_net', event_type='NETWORK', subtype='OUTBOUND',
+    actor='powershell',          # Sentinel logs process names without .exe
+    process_path=r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
+    destination='142.11.206.73',
+    base_severity='CRITICAL', trust_level='UNTRUSTED',
+    collector='sentinel', observed_at=_R43_EVT,
+)
+correlator._rule_45(reference_time=_R43_REF)
+conn = sqlite3.connect('hocsoc.db')
+conn.row_factory = sqlite3.Row
+_a127 = conn.execute("SELECT * FROM alerts WHERE rule_id=45").fetchall()
+conn.close()
+assert len(_a127) == 1, f'Expected 1 alert, got {len(_a127)}'
+assert _a127[0]['severity_current'] == 'CRITICAL'
+assert 'callback' in _a127[0]['explanation']
+print('  CRITICAL alert, callback in explanation  PASS')
+
+
+# -------------------------------------------------------
+# Test 128: Rule 45 no-fire -- spawn present but no outbound network callback
+# -------------------------------------------------------
+print('Test 128: Rule 45 no-fire when no outbound network connection follows spawn...')
+_reset_dbs()
+
+_insert_harbinger_spawn(
+    event_id='r45_no_net_proc',
+    actor='powershell.exe',
+    process_path=r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
+    trust_level='TRUSTED',
+    base_severity='SUSPICIOUS',
+    parent_name='chrome',
+)
+# No network event inserted
+correlator._rule_45(reference_time=_R43_REF)
+assert db.count_alerts() == 0, f'Expected 0 alerts (no network event), got {db.count_alerts()}'
+print('  no alert -- no outbound connection  PASS')
+
+
+# -------------------------------------------------------
+# Test 129: Rule 46 fires -- full chain: bad parent -> HIGH_RISK path -> outbound (CRITICAL)
+# -------------------------------------------------------
+print('Test 129: Rule 46 CRITICAL on full supply-chain execution chain...')
+_reset_dbs()
+
+_insert_harbinger_spawn(
+    event_id='r46_proc',
+    actor='python.exe',
+    process_path=os.path.join(appdata_temp, 'python.exe'),
+    trust_level='HIGH_RISK',
+    base_severity='CRITICAL',
+    parent_name='chrome',
+)
+_insert_event(
+    event_id='r46_net', event_type='NETWORK', subtype='OUTBOUND',
+    actor='python',
+    process_path=os.path.join(appdata_temp, 'python.exe'),
+    destination='142.11.206.73',
+    base_severity='CRITICAL', trust_level='UNTRUSTED',
+    collector='sentinel', observed_at=_R43_EVT,
+)
+correlator._rule_46(reference_time=_R43_REF)
+conn = sqlite3.connect('hocsoc.db')
+conn.row_factory = sqlite3.Row
+_a129 = conn.execute("SELECT * FROM alerts WHERE rule_id=46").fetchall()
+conn.close()
+assert len(_a129) == 1, f'Expected 1 alert, got {len(_a129)}'
+assert _a129[0]['severity_current'] == 'CRITICAL'
+assert 'supply-chain' in _a129[0]['explanation']
+print('  CRITICAL alert, supply-chain in explanation  PASS')
+
+
+# -------------------------------------------------------
+# Test 130: Rule 46 no-fire -- HIGH_RISK spawn without outbound network
+# -------------------------------------------------------
+print('Test 130: Rule 46 no-fire when HIGH_RISK spawn has no network connection...')
+_reset_dbs()
+
+_insert_harbinger_spawn(
+    event_id='r46_no_net',
+    actor='python.exe',
+    process_path=os.path.join(appdata_temp, 'python.exe'),
+    trust_level='HIGH_RISK',
+    base_severity='CRITICAL',
+    parent_name='chrome',
+)
+correlator._rule_46(reference_time=_R43_REF)
+assert db.count_alerts() == 0, f'Expected 0 alerts (no network event), got {db.count_alerts()}'
+print('  no alert -- no outbound connection  PASS')
+
+
+# -------------------------------------------------------
+# Test 131: Rule 47 fires -- -EncodedCommand flag present (HIGH)
+# -------------------------------------------------------
+print('Test 131: Rule 47 HIGH on -EncodedCommand flag...')
+_reset_dbs()
+
+_insert_harbinger_spawn(
+    event_id='r47_enc',
+    actor='powershell.exe',
+    process_path=r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
+    trust_level='TRUSTED',
+    base_severity='SUSPICIOUS',
+    parent_name='explorer',      # parent irrelevant -- Rule 47 checks CMD only
+    cmd='powershell.exe -EncodedCommand JABjAD0ATgBlAHcALQBPAGIAagBlAGMAdAA=',
+)
+correlator._rule_47(reference_time=_R43_REF)
+conn = sqlite3.connect('hocsoc.db')
+conn.row_factory = sqlite3.Row
+_a131 = conn.execute("SELECT * FROM alerts WHERE rule_id=47").fetchall()
+conn.close()
+assert len(_a131) == 1, f'Expected 1 alert, got {len(_a131)}'
+assert _a131[0]['severity_current'] == 'HIGH'
+assert 'Obfuscated' in _a131[0]['explanation']
+print('  HIGH alert, Obfuscated in explanation  PASS')
+
+
+# -------------------------------------------------------
+# Test 132: Rule 47 no-fire -- -ExecutionPolicy Bypass alone is not sufficient
+# -------------------------------------------------------
+print('Test 132: Rule 47 no-fire on -ExecutionPolicy Bypass alone...')
+_reset_dbs()
+
+_insert_harbinger_spawn(
+    event_id='r47_bypass_only',
+    actor='pwsh.exe',
+    process_path=r'C:\Program Files\PowerShell\7\pwsh.exe',
+    trust_level='TRUSTED',
+    base_severity='OK',
+    parent_name='explorer',
+    cmd='pwsh.exe -ExecutionPolicy Bypass -File "C:\\tools\\myscript.ps1"',
+)
+correlator._rule_47(reference_time=_R43_REF)
+assert db.count_alerts() == 0, (
+    f'Expected 0 alerts (-ExecutionPolicy Bypass alone not sufficient), '
+    f'got {db.count_alerts()}'
+)
+print('  no alert -- -ExecutionPolicy Bypass alone does not trigger Rule 47  PASS')
+
+
+# -------------------------------------------------------
+# Test 133: Rule 47 no-fire -- suite launcher CMD fragment excluded
+#   -WindowStyle Hidden + -ExecutionPolicy Bypass IS present, but the CMD
+#   also contains the suite launcher path fragment -> excluded
+# -------------------------------------------------------
+print('Test 133: Rule 47 no-fire when CMD contains suite launcher fragment...')
+_reset_dbs()
+
+_insert_harbinger_spawn(
+    event_id='r47_launcher',
+    actor='pwsh.exe',
+    process_path=r'C:\Program Files\PowerShell\7\pwsh.exe',
+    trust_level='TRUSTED',
+    base_severity='OK',
+    parent_name='python',
+    cmd=(
+        r'pwsh.exe -WindowStyle Hidden -ExecutionPolicy Bypass '
+        r'-File "C:\Users\Schuler\Desktop\SOC\Scripts\\Collectors\Harbinger.ps1"'
+    ),
+)
+correlator._rule_47(reference_time=_R43_REF)
+assert db.count_alerts() == 0, (
+    f'Expected 0 alerts (suite launcher excluded), got {db.count_alerts()}'
+)
+print('  no alert -- suite launcher CMD fragment excluded  PASS')
+
+
+# -------------------------------------------------------
+# Test 134: Rule 48 fires -- chrome spawns powershell (CRITICAL)
+# -------------------------------------------------------
+print('Test 134: Rule 48 CRITICAL on chrome spawning powershell...')
+_reset_dbs()
+
+_insert_harbinger_spawn(
+    event_id='r48_fire',
+    actor='powershell.exe',
+    process_path=r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
+    trust_level='TRUSTED',
+    base_severity='SUSPICIOUS',
+    parent_name='chrome',
+)
+correlator._rule_48(reference_time=_R43_REF)
+conn = sqlite3.connect('hocsoc.db')
+conn.row_factory = sqlite3.Row
+_a134 = conn.execute("SELECT * FROM alerts WHERE rule_id=48").fetchall()
+conn.close()
+assert len(_a134) == 1, f'Expected 1 alert, got {len(_a134)}'
+assert _a134[0]['severity_current'] == 'CRITICAL'
+assert 'chrome' in _a134[0]['explanation']
+print('  CRITICAL alert, chrome in explanation  PASS')
+
+
+# -------------------------------------------------------
+# Test 135: Rule 48 no-fire -- non-bad pair (explorer->powershell not in KNOWN_BAD_PAIRS)
+# -------------------------------------------------------
+print('Test 135: Rule 48 no-fire on pair not in KNOWN_BAD_PAIRS...')
+_reset_dbs()
+
+_insert_harbinger_spawn(
+    event_id='r48_nofire',
+    actor='powershell.exe',
+    process_path=r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
+    trust_level='TRUSTED',
+    base_severity='OK',
+    parent_name='explorer',      # explorer not in KNOWN_BAD_PAIRS
+)
+correlator._rule_48(reference_time=_R43_REF)
+assert db.count_alerts() == 0, (
+    f'Expected 0 alerts (explorer not in KNOWN_BAD_PAIRS), got {db.count_alerts()}'
+)
+print('  no alert -- explorer not in KNOWN_BAD_PAIRS  PASS')
+
+
 print()
-print('correlator.py PASS - all 117 tests')
+print('correlator.py PASS - all 135 tests')

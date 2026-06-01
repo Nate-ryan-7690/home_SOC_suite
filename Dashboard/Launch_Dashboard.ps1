@@ -19,20 +19,29 @@ $DashboardPath = "$env:USERPROFILE\Desktop\SOC\Dashboard"
 $PythonExe     = "$env:USERPROFILE\AppData\Local\Programs\Python\Python312\python.exe"
 
 # Dashboard port — must match DASHBOARD_PORT in app.py
-$Port          = 5000
+$Port          = 7001
 
 # ============================================================
 # DO NOT EDIT BELOW THIS LINE
 # ============================================================
 $URL           = "http://127.0.0.1:$Port"
 
+# Safety guard: abort if not pointing at the dev folder
+if ($DashboardPath -notmatch 'SOC') {
+    Write-Host "ERROR: DashboardPath does not point to SOC. Launcher aborted."
+    exit 1
+}
+
 $LogFile = "$env:USERPROFILE\Desktop\SOC\Logs\Dashboard_Launch.log"
 function Log($msg) { "$(Get-Date -Format 'HH:mm:ss') $msg" | Add-Content $LogFile }
 Log "Launcher started"
 
-# ── Check if Flask already running ──────────────────────────────
-$already = Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
-           Where-Object { $_.CommandLine -match 'app\.py' }
+# ── Check if Flask already running on dev port ──────────────────
+$already = $false
+try {
+    Invoke-WebRequest -Uri $URL -UseBasicParsing -TimeoutSec 1 -ErrorAction Stop | Out-Null
+    $already = $true
+} catch {}
 
 if (-not $already) {
     Log "Flask not running — starting: $PythonExe"
