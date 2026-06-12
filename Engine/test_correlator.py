@@ -1332,19 +1332,19 @@ def _net(event_id, actor, process_path, trust_level, base_severity,
 
 
 # -------------------------------------------------------
-# Test 43: Rule 11 fires — HIGH_RISK actor, 3 connections → SUSPICIOUS alert
+# Test 43: Rule 11 fires — HIGH_RISK actor, BURST_CONNECTION_THRESHOLD connections → SUSPICIOUS alert
 # -------------------------------------------------------
-print('Test 43: Rule 11 fires on HIGH_RISK actor with 3 connections...')
+print(f'Test 43: Rule 11 fires on HIGH_RISK actor with {config.BURST_CONNECTION_THRESHOLD} connections...')
 if os.path.exists('hocsoc.db'):
     os.remove('hocsoc.db')
 db.initialize()
 
 _appdata_temp = os.path.join(os.path.expanduser('~'), 'AppData', 'Local', 'Temp')
-for i, dest in enumerate(['1.2.3.4', '5.6.7.8', '9.10.11.12']):
+for i in range(config.BURST_CONNECTION_THRESHOLD):
     _net(f'r11_hr_{i}', actor='stager.exe',
          process_path=os.path.join(_appdata_temp, 'stager.exe'),
          trust_level='HIGH_RISK', base_severity='CRITICAL',
-         destination=dest, observed_at=f'2026-03-20 09:0{i}:00')
+         destination=f'1.2.3.{i + 1}', observed_at=f'2026-03-20 09:0{i}:00')
 
 correlator._rule_11(reference_time=_R11_REF)
 conn = sqlite3.connect('hocsoc.db')
@@ -1356,23 +1356,42 @@ assert len(det11) == 1, f'Expected 1 detection, got {len(det11)}'
 assert len(alt11) == 1, f'Expected 1 alert, got {len(alt11)}'
 assert alt11[0]['severity_current'] == 'SUSPICIOUS'
 assert 'stager' in alt11[0]['explanation']
-assert '3' in alt11[0]['explanation']
+assert str(config.BURST_CONNECTION_THRESHOLD) in alt11[0]['explanation']
 print('  SUSPICIOUS alert, actor and count in explanation  PASS')
 
 
 # -------------------------------------------------------
-# Test 44: Rule 11 fires — UNKNOWN actor, 3 connections → SUSPICIOUS alert
+# Test 43b: Rule 11 no-fire — one below threshold
 # -------------------------------------------------------
-print('Test 44: Rule 11 fires on UNKNOWN actor with 3 connections...')
+print(f'Test 43b: Rule 11 no-fire with {config.BURST_CONNECTION_THRESHOLD - 1} connections (threshold - 1)...')
 if os.path.exists('hocsoc.db'):
     os.remove('hocsoc.db')
 db.initialize()
 
-for i, dest in enumerate(['10.0.0.1', '10.0.0.2', '10.0.0.3']):
+for i in range(config.BURST_CONNECTION_THRESHOLD - 1):
+    _net(f'r11_below_{i}', actor='stager.exe',
+         process_path=os.path.join(_appdata_temp, 'stager.exe'),
+         trust_level='HIGH_RISK', base_severity='CRITICAL',
+         destination=f'2.2.2.{i + 1}', observed_at=f'2026-03-20 09:0{i}:00')
+
+correlator._rule_11(reference_time=_R11_REF)
+assert db.count_alerts() == 0, f'Expected 0 alerts at threshold-1, got {db.count_alerts()}'
+print('  no alert at threshold - 1  PASS')
+
+
+# -------------------------------------------------------
+# Test 44: Rule 11 fires — UNKNOWN actor, BURST_CONNECTION_THRESHOLD connections → SUSPICIOUS alert
+# -------------------------------------------------------
+print(f'Test 44: Rule 11 fires on UNKNOWN actor with {config.BURST_CONNECTION_THRESHOLD} connections...')
+if os.path.exists('hocsoc.db'):
+    os.remove('hocsoc.db')
+db.initialize()
+
+for i in range(config.BURST_CONNECTION_THRESHOLD):
     _net(f'r11_unk_{i}', actor='mystery.exe',
          process_path=r'C:\SomeUnknownFolder\mystery.exe',
          trust_level='UNKNOWN', base_severity='UNKNOWN',
-         destination=dest, observed_at=f'2026-03-20 09:0{i}:00')
+         destination=f'10.0.0.{i + 1}', observed_at=f'2026-03-20 09:0{i}:00')
 
 correlator._rule_11(reference_time=_R11_REF)
 conn = sqlite3.connect('hocsoc.db')
@@ -1385,18 +1404,18 @@ print('  UNKNOWN actor with burst also fires SUSPICIOUS alert (zero-trust)  PASS
 
 
 # -------------------------------------------------------
-# Test 45: Rule 11 — TRUSTED actor, 3 connections → detection only, no alert
+# Test 45: Rule 11 — TRUSTED actor, BURST_CONNECTION_THRESHOLD connections → detection only, no alert
 # -------------------------------------------------------
 print('Test 45: Rule 11 detection-only for TRUSTED actor burst...')
 if os.path.exists('hocsoc.db'):
     os.remove('hocsoc.db')
 db.initialize()
 
-for i, dest in enumerate(['20.0.0.1', '20.0.0.2', '20.0.0.3']):
+for i in range(config.BURST_CONNECTION_THRESHOLD):
     _net(f'r11_tr_{i}', actor='svchost.exe',
          process_path=r'C:\Windows\System32\svchost.exe',
          trust_level='TRUSTED', base_severity='OK',
-         destination=dest, observed_at=f'2026-03-20 09:0{i}:00')
+         destination=f'20.0.0.{i + 1}', observed_at=f'2026-03-20 09:0{i}:00')
 
 alerts_before = db.count_alerts()
 correlator._rule_11(reference_time=_R11_REF)
@@ -1438,11 +1457,11 @@ if os.path.exists('hocsoc.db'):
     os.remove('hocsoc.db')
 db.initialize()
 
-for i, dest in enumerate(['40.0.0.1', '40.0.0.2', '40.0.0.3']):
+for i in range(config.BURST_CONNECTION_THRESHOLD):
     _net(f'r11_dup_{i}', actor='beacon.exe',
          process_path=os.path.join(_appdata_temp, 'beacon.exe'),
          trust_level='HIGH_RISK', base_severity='CRITICAL',
-         destination=dest, observed_at=f'2026-03-20 09:0{i}:00')
+         destination=f'40.0.0.{i + 1}', observed_at=f'2026-03-20 09:0{i}:00')
 
 correlator._rule_11(reference_time=_R11_REF)
 correlator._rule_11(reference_time=_R11_REF)   # second call — same data
@@ -1822,7 +1841,7 @@ db.initialize()
 _insert_event(
     event_id='r22_sync', event_type='NETWORK', subtype='OUTBOUND',
     actor='onedrive',
-    process_path=r'C:\Users\TestUser\AppData\Local\Microsoft\OneDrive\OneDrive.exe',
+    process_path=r'C:\Users\Schüler\AppData\Local\Microsoft\OneDrive\OneDrive.exe',
     destination='13.107.42.14',
     base_severity='CRITICAL', trust_level='HIGH_RISK',
     collector='sentinel', observed_at=_R22_AFTER,
@@ -2578,12 +2597,12 @@ _r2_ref        = datetime(2026, 3, 25, 11, 0, 0)   # 1 hour after events — wit
 # -------------------------------------------------------
 # Test 90: Rule 2 fires with >= C2_BEACON_MIN_SESSIONS CONNECTION_END sessions
 # -------------------------------------------------------
-print('Test 90: Rule 2 — beacon fires with 3 sessions...')
+print(f'Test 90: Rule 2 — beacon fires with {config.C2_BEACON_MIN_SESSIONS} sessions...')
 if os.path.exists('hocsoc.db'):
     os.remove('hocsoc.db')
 db.initialize()
 
-for i in range(3):
+for i in range(config.C2_BEACON_MIN_SESSIONS):
     _insert_event(
         event_id=f'r2_sess_{i}', event_type='NETWORK', subtype='CONNECTION_END',
         actor='malware.exe', process_path=r'C:\Users\Public\malware.exe',
@@ -2605,14 +2624,14 @@ print('  1 SUSPICIOUS alert, explanation contains destination  PASS')
 
 
 # -------------------------------------------------------
-# Test 91: Rule 2 no-fire below threshold (2 sessions < 3)
+# Test 91: Rule 2 no-fire below threshold (C2_BEACON_MIN_SESSIONS - 1 sessions)
 # -------------------------------------------------------
-print('Test 91: Rule 2 — no alert below threshold...')
+print(f'Test 91: Rule 2 — no alert below threshold ({config.C2_BEACON_MIN_SESSIONS - 1} sessions)...')
 if os.path.exists('hocsoc.db'):
     os.remove('hocsoc.db')
 db.initialize()
 
-for i in range(2):
+for i in range(config.C2_BEACON_MIN_SESSIONS - 1):
     _insert_event(
         event_id=f'r2_low_{i}', event_type='NETWORK', subtype='CONNECTION_END',
         actor='malware.exe', process_path=r'C:\Users\Public\malware.exe',
@@ -2623,7 +2642,7 @@ for i in range(2):
 
 correlator._rule_2(reference_time=_r2_ref)
 assert db.count_alerts() == 0, f'Expected 0 alerts below threshold, got {db.count_alerts()}'
-print('  0 alerts with 2 sessions (below threshold of 3)  PASS')
+print(f'  0 alerts with {config.C2_BEACON_MIN_SESSIONS - 1} sessions (below threshold of {config.C2_BEACON_MIN_SESSIONS})  PASS')
 
 
 # -------------------------------------------------------
@@ -2634,7 +2653,7 @@ if os.path.exists('hocsoc.db'):
     os.remove('hocsoc.db')
 db.initialize()
 
-for i in range(3):
+for i in range(config.C2_BEACON_MIN_SESSIONS):
     _insert_event(
         event_id=f'r2_conf_{i}', event_type='NETWORK', subtype='CONNECTION_END',
         actor='malware.exe', process_path=r'C:\Users\Public\malware.exe',
@@ -2672,7 +2691,7 @@ if os.path.exists('hocsoc.db'):
     os.remove('hocsoc.db')
 db.initialize()
 
-for i in range(3):
+for i in range(config.C2_BEACON_MIN_SESSIONS):
     _insert_event(
         event_id=f'r2_dup_{i}', event_type='NETWORK', subtype='CONNECTION_END',
         actor='malware.exe', process_path=r'C:\Users\Public\malware.exe',
@@ -2752,7 +2771,7 @@ db.initialize()
 
 _insert_event(
     event_id='r29_fire', event_type='PROCESS', subtype='HIGH_RISK_LAUNCH',
-    actor='payload.exe', process_path=r'C:\Users\TestUser\Downloads\payload.exe',
+    actor='payload.exe', process_path=r'C:\Users\Schüler\Downloads\payload.exe',
     destination=None,
     base_severity='CRITICAL', trust_level='HIGH_RISK',
     collector='sysmonwatcher',
@@ -2778,7 +2797,7 @@ db.initialize()
 
 _insert_event(
     event_id='r29_nofire', event_type='PROCESS', subtype='HIGH_RISK_LAUNCH',
-    actor='installer.exe', process_path=r'C:\Users\TestUser\Downloads\installer.exe',
+    actor='installer.exe', process_path=r'C:\Users\Schüler\Downloads\installer.exe',
     destination=None,
     base_severity='OK', trust_level='TRUSTED',
     collector='sysmonwatcher',
@@ -2870,7 +2889,7 @@ db.initialize()
 
 _insert_event(
     event_id='r31_userpath', event_type='DLL', subtype='DLL_USERPATH',
-    actor='someapp.exe', process_path=r'C:\Users\TestUser\AppData\Roaming\someapp\helper.dll',
+    actor='someapp.exe', process_path=r'C:\Users\Schüler\AppData\Roaming\someapp\helper.dll',
     destination=None,
     base_severity='SUSPICIOUS', trust_level='UNKNOWN',
     collector='sysmonwatcher',
@@ -2895,7 +2914,7 @@ db.initialize()
 
 _insert_event(
     event_id='r32_binding', event_type='WMI', subtype='WMI_BINDING',
-    actor='TESTPC\\TestUser', process_path=None,
+    actor='NBDA0665\\Schüler', process_path=None,
     destination=None,
     base_severity='CRITICAL', trust_level='UNKNOWN',
     collector='sysmonwatcher',
@@ -3173,16 +3192,16 @@ print('  SUSPICIOUS alert, connected to in explanation  PASS')
 
 
 # -------------------------------------------------------
-# Test 114: Rule 38 — fires on FILE/EXECUTABLE_CREATED (CRITICAL)
+# Test 114: Rule 38 — fires on FILE/FILE_HOTPATH (CRITICAL)
 # -------------------------------------------------------
-print('Test 114: Rule 38 fires on FILE/EXECUTABLE_CREATED...')
+print('Test 114: Rule 38 fires on FILE/FILE_HOTPATH...')
 if os.path.exists('hocsoc.db'):
     os.remove('hocsoc.db')
 db.initialize()
 
 _insert_event(
-    event_id='r38_exec', event_type='FILE', subtype='EXECUTABLE_CREATED',
-    actor='chrome.exe', process_path=r'C:\Users\TestUser\Downloads\evil.exe',
+    event_id='r38_exec', event_type='FILE', subtype='FILE_HOTPATH',
+    actor='chrome.exe', process_path=r'C:\Users\Schüler\Downloads\evil.exe',
     destination=None,
     base_severity='CRITICAL', trust_level='HIGH_RISK',
     collector='sysmonwatcher',
@@ -3194,21 +3213,21 @@ _a114 = _c114.execute("SELECT * FROM alerts WHERE rule_id=38").fetchall()
 _c114.close()
 assert len(_a114) == 1, f'Expected 1 alert, got {len(_a114)}'
 assert _a114[0]['severity_current'] == 'CRITICAL'
-assert 'EXECUTABLE_CREATED' in _a114[0]['explanation']
+assert 'staging path' in _a114[0]['explanation']
 print('  CRITICAL alert for dropped executable  PASS')
 
 
 # -------------------------------------------------------
-# Test 115: Rule 38 — SUSPICIOUS for ZONE_IDENTIFIER
+# Test 115: Rule 38 — SUSPICIOUS for DOWNLOADED_FILE
 # -------------------------------------------------------
-print('Test 115: Rule 38 fires on FILE/ZONE_IDENTIFIER (SUSPICIOUS)...')
+print('Test 115: Rule 38 fires on FILE/DOWNLOADED_FILE (SUSPICIOUS)...')
 if os.path.exists('hocsoc.db'):
     os.remove('hocsoc.db')
 db.initialize()
 
 _insert_event(
-    event_id='r38_zone', event_type='FILE', subtype='ZONE_IDENTIFIER',
-    actor='browser.exe', process_path=r'C:\Users\TestUser\Downloads\setup.exe',
+    event_id='r38_zone', event_type='FILE', subtype='DOWNLOADED_FILE',
+    actor='browser.exe', process_path=r'C:\Users\Schüler\Downloads\setup.exe',
     destination=None,
     base_severity='SUSPICIOUS', trust_level='UNKNOWN',
     collector='sysmonwatcher',
@@ -3271,13 +3290,12 @@ print('  no alert for PROCESS_TERMINATED (wrong subtype)  PASS')
 
 
 
-
 # ============================================================
-# TESTS 118-121: Rules 41 and 42 -- Blind Window & Coordinated Suppression
+# TESTS 118–121: Rules 41 and 42 — Blind Window & Coordinated Suppression
 # ============================================================
 
 _R41_EVT = '2026-03-21 08:00:00'
-_R41_REF = _dt(2026, 3, 21, 8, 5, 0)   # 5 min after -> inside SHORT_WINDOW
+_R41_REF = _dt(2026, 3, 21, 8, 5, 0)   # 5 min after → inside SHORT_WINDOW
 _R42_REF = _dt(2026, 3, 21, 9, 0, 0)
 
 
@@ -3292,7 +3310,7 @@ def _reset_dbs():
 
 
 # -------------------------------------------------------
-# Test 118: Rule 41 fires -- NETWORK_BLIND_PROCESS
+# Test 118: Rule 41 fires — NETWORK_BLIND_PROCESS
 #   Sentinel DOWN + Harbinger reports a SUSPICIOUS process in the gap
 # -------------------------------------------------------
 print('Test 118: Rule 41 CRITICAL on Sentinel DOWN + Harbinger SUSPICIOUS process...')
@@ -3322,7 +3340,7 @@ print('  CRITICAL NETWORK_BLIND_PROCESS alert  PASS')
 
 
 # -------------------------------------------------------
-# Test 119: Rule 41 no-fire -- no collectors are DOWN
+# Test 119: Rule 41 no-fire — no collectors are DOWN
 # -------------------------------------------------------
 print('Test 119: Rule 41 no-fire when no collectors are DOWN...')
 _reset_dbs()
@@ -3333,14 +3351,14 @@ _insert_event(
     destination=None, base_severity='SUSPICIOUS', trust_level='HIGH_RISK',
     collector='harbinger', observed_at=_R41_EVT,
 )
-# health_db is empty -> no DOWN collectors recorded
+# health_db is empty → no DOWN collectors recorded
 correlator._rule_41(reference_time=_R41_REF)
 assert db.count_alerts() == 0, f'Expected 0 alerts (no DOWN collectors), got {db.count_alerts()}'
-print('  no alert -- no DOWN collectors  PASS')
+print('  no alert — no DOWN collectors  PASS')
 
 
 # -------------------------------------------------------
-# Test 120: Rule 42 fires -- 2 collectors simultaneously DOWN
+# Test 120: Rule 42 fires — 2 collectors simultaneously DOWN
 # -------------------------------------------------------
 print('Test 120: Rule 42 CRITICAL on 2 collectors simultaneously DOWN...')
 _reset_dbs()
@@ -3362,7 +3380,7 @@ print('  CRITICAL COORDINATED_SUPPRESSION alert  PASS')
 
 
 # -------------------------------------------------------
-# Test 121: Rule 42 no-fire -- only 1 collector DOWN
+# Test 121: Rule 42 no-fire — only 1 collector DOWN
 # -------------------------------------------------------
 print('Test 121: Rule 42 no-fire when only 1 collector is DOWN...')
 _reset_dbs()
@@ -3373,22 +3391,22 @@ health_db.upsert_collector_status(
 )
 correlator._rule_42(reference_time=_R42_REF)
 assert db.count_alerts() == 0, f'Expected 0 alerts (only 1 DOWN), got {db.count_alerts()}'
-print('  no alert -- only 1 collector DOWN  PASS')
+print('  no alert — only 1 collector DOWN  PASS')
 
 
 # ============================================================
-# TESTS 122-135: Rules 43-48 -- Supply-Chain Spawn Detection
+# TESTS 122–135: Rules 43–48 — Supply-Chain Spawn Detection
 # ============================================================
 
 _R43_EVT = '2026-03-22 09:00:00'
-_R43_REF = _dt(2026, 3, 22, 9, 5, 0)   # 5 min after -> inside SHORT_WINDOW
+_R43_REF = _dt(2026, 3, 22, 9, 5, 0)   # 5 min after → inside SHORT_WINDOW
 
 
 def _insert_harbinger_spawn(event_id, actor, process_path, trust_level,
                              base_severity, parent_name, cmd='',
                              observed_at=_R43_EVT):
     """Insert a Harbinger PROCESS event plus the raw_events row needed for
-    parent/CMD matching via the JOIN used by Rules 43-48."""
+    parent/CMD matching via the JOIN used by Rules 43–48."""
     _insert_event(
         event_id=event_id, event_type='PROCESS', subtype='NEW PROCESS',
         actor=actor, process_path=process_path, destination=None,
@@ -3412,7 +3430,7 @@ def _insert_harbinger_spawn(event_id, actor, process_path, trust_level,
 
 
 # -------------------------------------------------------
-# Test 122: Rule 43 fires -- chrome spawns powershell (SUSPICIOUS)
+# Test 122: Rule 43 fires — chrome spawns powershell (SUSPICIOUS)
 # -------------------------------------------------------
 print('Test 122: Rule 43 SUSPICIOUS on chrome spawning powershell...')
 _reset_dbs()
@@ -3437,7 +3455,7 @@ print('  SUSPICIOUS alert, scripting engine in explanation  PASS')
 
 
 # -------------------------------------------------------
-# Test 123: Rule 43 no-fire -- suite launcher CMD fragment excluded
+# Test 123: Rule 43 no-fire — suite launcher CMD fragment excluded
 #   node IS in KNOWN_BAD_PARENTS, but CMD contains the suite launcher path
 # -------------------------------------------------------
 print('Test 123: Rule 43 no-fire when CMD contains suite launcher fragment...')
@@ -3460,11 +3478,11 @@ correlator._rule_43(reference_time=_R43_REF)
 assert db.count_alerts() == 0, (
     f'Expected 0 alerts (suite launcher excluded), got {db.count_alerts()}'
 )
-print('  no alert -- suite launcher CMD fragment excluded  PASS')
+print('  no alert — suite launcher CMD fragment excluded  PASS')
 
 
 # -------------------------------------------------------
-# Test 124: Rule 43 no-fire -- non-bad parent (explorer is not in KNOWN_BAD_PARENTS)
+# Test 124: Rule 43 no-fire — non-bad parent (explorer is not in KNOWN_BAD_PARENTS)
 # -------------------------------------------------------
 print('Test 124: Rule 43 no-fire when parent is not in KNOWN_BAD_PARENTS...')
 _reset_dbs()
@@ -3481,11 +3499,11 @@ correlator._rule_43(reference_time=_R43_REF)
 assert db.count_alerts() == 0, (
     f'Expected 0 alerts (explorer not a bad parent), got {db.count_alerts()}'
 )
-print('  no alert -- explorer not in KNOWN_BAD_PARENTS  PASS')
+print('  no alert — explorer not in KNOWN_BAD_PARENTS  PASS')
 
 
 # -------------------------------------------------------
-# Test 125: Rule 44 fires -- node spawns python from HIGH_RISK path (HIGH)
+# Test 125: Rule 44 fires — node spawns python from HIGH_RISK path (HIGH)
 # -------------------------------------------------------
 print('Test 125: Rule 44 HIGH on node spawning python from HIGH_RISK path...')
 _reset_dbs()
@@ -3510,7 +3528,7 @@ print('  HIGH alert, high-risk path in explanation  PASS')
 
 
 # -------------------------------------------------------
-# Test 126: Rule 44 no-fire -- spawn from trusted path (trust_level not HIGH_RISK)
+# Test 126: Rule 44 no-fire — spawn from trusted path (trust_level not HIGH_RISK)
 # -------------------------------------------------------
 print('Test 126: Rule 44 no-fire when spawn path is trusted...')
 _reset_dbs()
@@ -3519,7 +3537,7 @@ _insert_harbinger_spawn(
     event_id='r44_nofire_trusted',
     actor='powershell.exe',
     process_path=r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
-    trust_level='TRUSTED',       # NOT HIGH_RISK -> Rule 44 should not fire
+    trust_level='TRUSTED',       # NOT HIGH_RISK → Rule 44 should not fire
     base_severity='SUSPICIOUS',
     parent_name='chrome',
 )
@@ -3527,11 +3545,11 @@ correlator._rule_44(reference_time=_R43_REF)
 assert db.count_alerts() == 0, (
     f'Expected 0 alerts (trust_level TRUSTED, not HIGH_RISK), got {db.count_alerts()}'
 )
-print('  no rule-44 alert -- trust_level TRUSTED is not HIGH_RISK  PASS')
+print('  no rule-44 alert — trust_level TRUSTED is not HIGH_RISK  PASS')
 
 
 # -------------------------------------------------------
-# Test 127: Rule 45 fires -- chrome->powershell + powershell outbound callback (CRITICAL)
+# Test 127: Rule 45 fires — chrome→powershell + powershell outbound callback (CRITICAL)
 # -------------------------------------------------------
 print('Test 127: Rule 45 CRITICAL on bad-parent spawn + matching outbound network...')
 _reset_dbs()
@@ -3564,7 +3582,7 @@ print('  CRITICAL alert, callback in explanation  PASS')
 
 
 # -------------------------------------------------------
-# Test 128: Rule 45 no-fire -- spawn present but no outbound network callback
+# Test 128: Rule 45 no-fire — spawn present but no outbound network callback
 # -------------------------------------------------------
 print('Test 128: Rule 45 no-fire when no outbound network connection follows spawn...')
 _reset_dbs()
@@ -3580,11 +3598,11 @@ _insert_harbinger_spawn(
 # No network event inserted
 correlator._rule_45(reference_time=_R43_REF)
 assert db.count_alerts() == 0, f'Expected 0 alerts (no network event), got {db.count_alerts()}'
-print('  no alert -- no outbound connection  PASS')
+print('  no alert — no outbound connection  PASS')
 
 
 # -------------------------------------------------------
-# Test 129: Rule 46 fires -- full chain: bad parent -> HIGH_RISK path -> outbound (CRITICAL)
+# Test 129: Rule 46 fires — full chain: bad parent → HIGH_RISK path → outbound (CRITICAL)
 # -------------------------------------------------------
 print('Test 129: Rule 46 CRITICAL on full supply-chain execution chain...')
 _reset_dbs()
@@ -3617,7 +3635,7 @@ print('  CRITICAL alert, supply-chain in explanation  PASS')
 
 
 # -------------------------------------------------------
-# Test 130: Rule 46 no-fire -- HIGH_RISK spawn without outbound network
+# Test 130: Rule 46 no-fire — HIGH_RISK spawn without outbound network
 # -------------------------------------------------------
 print('Test 130: Rule 46 no-fire when HIGH_RISK spawn has no network connection...')
 _reset_dbs()
@@ -3632,11 +3650,11 @@ _insert_harbinger_spawn(
 )
 correlator._rule_46(reference_time=_R43_REF)
 assert db.count_alerts() == 0, f'Expected 0 alerts (no network event), got {db.count_alerts()}'
-print('  no alert -- no outbound connection  PASS')
+print('  no alert — no outbound connection  PASS')
 
 
 # -------------------------------------------------------
-# Test 131: Rule 47 fires -- -EncodedCommand flag present (HIGH)
+# Test 131: Rule 47 fires — -EncodedCommand flag present (HIGH)
 # -------------------------------------------------------
 print('Test 131: Rule 47 HIGH on -EncodedCommand flag...')
 _reset_dbs()
@@ -3647,7 +3665,7 @@ _insert_harbinger_spawn(
     process_path=r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
     trust_level='TRUSTED',
     base_severity='SUSPICIOUS',
-    parent_name='explorer',      # parent irrelevant -- Rule 47 checks CMD only
+    parent_name='explorer',      # parent irrelevant — Rule 47 checks CMD only
     cmd='powershell.exe -EncodedCommand JABjAD0ATgBlAHcALQBPAGIAagBlAGMAdAA=',
 )
 correlator._rule_47(reference_time=_R43_REF)
@@ -3662,7 +3680,7 @@ print('  HIGH alert, Obfuscated in explanation  PASS')
 
 
 # -------------------------------------------------------
-# Test 132: Rule 47 no-fire -- -ExecutionPolicy Bypass alone is not sufficient
+# Test 132: Rule 47 no-fire — -ExecutionPolicy Bypass alone is not sufficient
 # -------------------------------------------------------
 print('Test 132: Rule 47 no-fire on -ExecutionPolicy Bypass alone...')
 _reset_dbs()
@@ -3681,13 +3699,13 @@ assert db.count_alerts() == 0, (
     f'Expected 0 alerts (-ExecutionPolicy Bypass alone not sufficient), '
     f'got {db.count_alerts()}'
 )
-print('  no alert -- -ExecutionPolicy Bypass alone does not trigger Rule 47  PASS')
+print('  no alert — -ExecutionPolicy Bypass alone does not trigger Rule 47  PASS')
 
 
 # -------------------------------------------------------
-# Test 133: Rule 47 no-fire -- suite launcher CMD fragment excluded
+# Test 133: Rule 47 no-fire — suite launcher CMD fragment excluded
 #   -WindowStyle Hidden + -ExecutionPolicy Bypass IS present, but the CMD
-#   also contains the suite launcher path fragment -> excluded
+#   also contains the suite launcher path fragment → excluded
 # -------------------------------------------------------
 print('Test 133: Rule 47 no-fire when CMD contains suite launcher fragment...')
 _reset_dbs()
@@ -3708,11 +3726,11 @@ correlator._rule_47(reference_time=_R43_REF)
 assert db.count_alerts() == 0, (
     f'Expected 0 alerts (suite launcher excluded), got {db.count_alerts()}'
 )
-print('  no alert -- suite launcher CMD fragment excluded  PASS')
+print('  no alert — suite launcher CMD fragment excluded  PASS')
 
 
 # -------------------------------------------------------
-# Test 134: Rule 48 fires -- chrome spawns powershell (CRITICAL)
+# Test 134: Rule 48 fires — chrome spawns powershell (CRITICAL)
 # -------------------------------------------------------
 print('Test 134: Rule 48 CRITICAL on chrome spawning powershell...')
 _reset_dbs()
@@ -3737,7 +3755,7 @@ print('  CRITICAL alert, chrome in explanation  PASS')
 
 
 # -------------------------------------------------------
-# Test 135: Rule 48 no-fire -- non-bad pair (explorer->powershell not in KNOWN_BAD_PAIRS)
+# Test 135: Rule 48 no-fire — non-bad pair (explorer→powershell not in KNOWN_BAD_PAIRS)
 # -------------------------------------------------------
 print('Test 135: Rule 48 no-fire on pair not in KNOWN_BAD_PAIRS...')
 _reset_dbs()
@@ -3754,7 +3772,7 @@ correlator._rule_48(reference_time=_R43_REF)
 assert db.count_alerts() == 0, (
     f'Expected 0 alerts (explorer not in KNOWN_BAD_PAIRS), got {db.count_alerts()}'
 )
-print('  no alert -- explorer not in KNOWN_BAD_PAIRS  PASS')
+print('  no alert — explorer not in KNOWN_BAD_PAIRS  PASS')
 
 
 print()

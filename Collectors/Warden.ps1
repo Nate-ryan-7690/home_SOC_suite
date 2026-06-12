@@ -8,8 +8,8 @@
 #                                  Run this after every legitimate file change
 #
 # Maintenance mode (suppresses FIM alerts during updates):
-#   SET:   New-Item "$env:USERPROFILE\Desktop\SOC\Config\maintenance.flag" -ItemType File
-#   CLEAR: Remove-Item "$env:USERPROFILE\Desktop\SOC\Config\maintenance.flag"
+#   SET:   New-Item "<SOC root>\Config\maintenance.flag" -ItemType File
+#   CLEAR: Remove-Item "<SOC root>\Config\maintenance.flag"
 # ============================================================
 
 param([switch]$BuildManifest)
@@ -18,10 +18,23 @@ chcp 65001 | Out-Null
 
 # ============================================================
 # USER CONFIGURATION
-# Set $RootPath to the folder where you installed the SOC Suite
+# RootPath is auto-detected from the script location (Scripts folder -> SOC root)
 # ============================================================
-$RootPath              = "$env:USERPROFILE\Desktop\SOC"
+if ($PSScriptRoot) {
+    $RootPath       = Split-Path -Parent $PSScriptRoot
+    $RootPathSource = "auto"
+} else {
+    $RootPath       = "$env:USERPROFILE\Desktop\SOC"
+    $RootPathSource = "fallback"
+}
+if (-not (Test-Path "$RootPath\Logs\Archives") -or -not (Test-Path "$RootPath\Config")) {
+    Write-Warning "RootPath '$RootPath' is missing Logs\Archives or Config - verify install layout. Creating folders."
+    New-Item -ItemType Directory -Path "$RootPath\Logs\Archives" -Force | Out-Null
+    New-Item -ItemType Directory -Path "$RootPath\Config" -Force | Out-Null
+}
 $LogFile               = "$RootPath\Logs\Warden_Log.txt"
+$RootPathSeverity = if ($RootPathSource -eq "auto") { "OK" } else { "SUSPICIOUS" }
+Add-Content $LogFile "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [$RootPathSeverity] ROOTPATH_RESOLVED: $RootPath (source: $RootPathSource)" -Encoding UTF8
 $ArchiveFolder         = "$RootPath\Logs\Archives"
 $HealthFile            = "$RootPath\Config\Warden_Health.json"
 $ManifestFile          = "$RootPath\Config\Warden_Manifest.json"

@@ -37,9 +37,13 @@ chcp 65001 | Out-Null
 
 # ============================================================
 # USER CONFIGURATION
-# Set $RootPath to the folder where you installed the SOC Suite
+# RootPath is auto-detected from the script location (Scripts folder -> SOC root)
 # ============================================================
-$RootPath         = "$env:USERPROFILE\Desktop\SOC"
+if ($PSScriptRoot) {
+    $RootPath = Split-Path -Parent $PSScriptRoot
+} else {
+    $RootPath = "$env:USERPROFILE\Desktop\SOC"
+}
 $ReportFolder     = "$RootPath\Reports"
 $LogFolder        = "$RootPath\Logs"
 $ArchiveFolder    = "$RootPath\Logs\Archives"

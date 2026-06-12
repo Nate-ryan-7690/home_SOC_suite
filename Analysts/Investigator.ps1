@@ -1,10 +1,13 @@
 # --- INVESTIGATOR: THE CLEAN SUMMARY ---
 # ============================================================
 # USER CONFIGURATION
-# Set $RootPath to the folder where you installed the SOC Suite
-# Default is Desktop\SOC — change this if you installed elsewhere
+# RootPath is auto-detected from the script location (Scripts folder -> SOC root)
 # ============================================================
-$RootPath = "$env:USERPROFILE\Desktop\SOC"
+if ($PSScriptRoot) {
+    $RootPath = Split-Path -Parent $PSScriptRoot
+} else {
+    $RootPath = "$env:USERPROFILE\Desktop\SOC"
+}
 $LogFile = "$RootPath\Logs\Network_Watchdog_Log.txt"
 $ReportFile = "$RootPath\Reports\Weekly_Audit_Report.txt"
 

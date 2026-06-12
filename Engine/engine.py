@@ -228,6 +228,14 @@ def startup():
         f"Collectors monitored: {len(config.LOG_FILES)}."
     ))
 
+    # An env-var override of the root path is legitimate for tests and
+    # forensics but suspicious on a production engine. Make it visible.
+    _root_severity = 'OK' if config.ROOT_PATH_SOURCE == 'auto' else 'SUSPICIOUS'
+    _log(_root_severity, (
+        f"ROOTPATH_RESOLVED: {config.ROOT_PATH} "
+        f"(source: {config.ROOT_PATH_SOURCE})"
+    ))
+
     # Log which collectors have existing log files vs missing
     missing = [
         name for name, path in config.LOG_FILES.items()

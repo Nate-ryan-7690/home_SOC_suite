@@ -13,8 +13,22 @@ chcp 65001 | Out-Null
 # ============================================================
 # USER CONFIGURATION
 # ============================================================
-$RootPath      = "$env:USERPROFILE\Desktop\SOC"
+# RootPath is auto-detected from the script location (Scripts folder -> SOC root)
+if ($PSScriptRoot) {
+    $RootPath       = Split-Path -Parent $PSScriptRoot
+    $RootPathSource = "auto"
+} else {
+    $RootPath       = "$env:USERPROFILE\Desktop\SOC"
+    $RootPathSource = "fallback"
+}
+if (-not (Test-Path "$RootPath\Logs\Archives") -or -not (Test-Path "$RootPath\Config")) {
+    Write-Warning "RootPath '$RootPath' is missing Logs\Archives or Config - verify install layout. Creating folders."
+    New-Item -ItemType Directory -Path "$RootPath\Logs\Archives" -Force | Out-Null
+    New-Item -ItemType Directory -Path "$RootPath\Config" -Force | Out-Null
+}
 $LogFile       = "$RootPath\Logs\DoHDetector_Log.txt"
+$RootPathSeverity = if ($RootPathSource -eq "auto") { "OK" } else { "SUSPICIOUS" }
+Add-Content $LogFile "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [$RootPathSeverity] ROOTPATH_RESOLVED: $RootPath (source: $RootPathSource)" -Encoding UTF8
 $ArchiveFolder = "$RootPath\Logs\Archives"
 $HealthFile    = "$RootPath\Config\DoHDetector_Health.json"
 

@@ -23,8 +23,9 @@ app = Flask(__name__)
 # USER CONFIGURATION — change these if your layout differs
 # ============================================================
 
-# SOC root — default is Desktop\SOC. Change if installed elsewhere.
-ROOT_PATH     = os.path.join(os.path.expanduser("~"), "Desktop", "SOC")
+# SOC root is auto-detected from this file's location (Dashboard/ -> root).
+# No env override here: the dashboard must always display the tree it lives in.
+ROOT_PATH     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # PowerShell 7+ executable. Two common locations:
 #   Windows Store install (default): ~\AppData\Local\Microsoft\WindowsApps\pwsh.exe
@@ -454,7 +455,7 @@ def stop_all():
             ["powershell", "-Command",
              # Kill collector pwsh windows
              "Get-CimInstance Win32_Process -Filter \"Name='pwsh.exe'\" | "
-             "Where-Object { $_.CommandLine -match 'SOC\\\\Scripts' } | "
+             "Where-Object { $_.CommandLine -match 'SOC_dev\\\\Scripts' } | "
              "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; "
              # Kill engine pwsh window
              "Get-CimInstance Win32_Process -Filter \"Name='pwsh.exe'\" | "

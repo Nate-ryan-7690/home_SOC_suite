@@ -12,10 +12,19 @@ import os
 import socket
 
 # ============================================================
-# USER CONFIGURATION
-# Set ROOT_PATH to your SOC installation folder.
+# ROOT PATH RESOLUTION
+# 1. NW_ROOT_PATH environment variable (override, used by tests/CI
+#    and forensic analysis of a copied evidence tree)
+# 2. Auto-detected from this file's location (Engine/ -> SOC root)
+# The engine logs the resolved path and source at startup so an
+# unexpected override is visible in the evidence trail.
 # ============================================================
-ROOT_PATH = os.path.join(os.path.expanduser("~"), "Desktop", "SOC")
+if os.environ.get("NW_ROOT_PATH"):
+    ROOT_PATH = os.environ["NW_ROOT_PATH"]
+    ROOT_PATH_SOURCE = "override"
+else:
+    ROOT_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    ROOT_PATH_SOURCE = "auto"
 
 # ============================================================
 # PATHS

@@ -904,8 +904,7 @@ def _rule_11(reference_time=None):
     # Group by normalised actor name (strip .exe for cross-source consistency)
     by_actor = defaultdict(list)
     for e in net_events:
-        key = (e['actor'] or '').lower().rstrip('.exe') if e['actor'] else ''
-        key = key.rstrip('.')          # handles names that don't end in .exe
+        key = (e['actor'] or '').lower().removesuffix('.exe') if e['actor'] else ''
         by_actor[key].append(e)
 
     weight = config.RULE_WEIGHTS[11]
@@ -1307,7 +1306,7 @@ def _rule_22(reference_time=None):
     Window:  SHORT_WINDOW (10 min)
     Weight:  config.RULE_WEIGHTS[22]
     """
-    _sync_set = {s.lower().rstrip('.exe') for s in config.KNOWN_SYNC_CLIENTS}
+    _sync_set = {s.lower().removesuffix('.exe') for s in config.KNOWN_SYNC_CLIENTS}
 
     net_events = db.get_events_in_window(
         config.SHORT_WINDOW, event_type='NETWORK', reference_time=reference_time
@@ -1322,7 +1321,7 @@ def _rule_22(reference_time=None):
             continue
 
         # Strip .exe for comparison against the sync whitelist
-        actor_key = (evt['actor'] or '').lower().rstrip('.exe').rstrip('.')
+        actor_key = (evt['actor'] or '').lower().removesuffix('.exe')
         if actor_key in _sync_set:
             continue    # known legitimate sync client — skip
 
@@ -2413,7 +2412,7 @@ def _rule_41(reference_time=None):
     Source: health_db (collector status) + events (concurrent activity).
     """
     _now = reference_time or datetime.now()
-    if (_now - _MODULE_LOAD_TIME).total_seconds() < config.STARTUP_GRACE_SECONDS:
+    if reference_time is None and (_now - _MODULE_LOAD_TIME).total_seconds() < config.STARTUP_GRACE_SECONDS:
         return
 
     down_collectors = [
@@ -2574,7 +2573,7 @@ def _rule_42(reference_time=None):
     Source: health_db only.
     """
     _now = reference_time or datetime.now()
-    if (_now - _MODULE_LOAD_TIME).total_seconds() < config.STARTUP_GRACE_SECONDS:
+    if reference_time is None and (_now - _MODULE_LOAD_TIME).total_seconds() < config.STARTUP_GRACE_SECONDS:
         return
 
     down_collectors = [

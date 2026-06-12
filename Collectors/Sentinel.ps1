@@ -1,10 +1,22 @@
 # ============================================================
 # USER CONFIGURATION
-# Set $RootPath to the folder where you installed the SOC Suite
-# Default is Desktop\SOC — change this if you installed elsewhere
+# RootPath is auto-detected from the script location (Scripts folder -> SOC root)
 # ============================================================
-$RootPath = "$env:USERPROFILE\Desktop\SOC"
+if ($PSScriptRoot) {
+    $RootPath       = Split-Path -Parent $PSScriptRoot
+    $RootPathSource = "auto"
+} else {
+    $RootPath       = "$env:USERPROFILE\Desktop\SOC"
+    $RootPathSource = "fallback"
+}
+if (-not (Test-Path "$RootPath\Logs\Archives") -or -not (Test-Path "$RootPath\Config")) {
+    Write-Warning "RootPath '$RootPath' is missing Logs\Archives or Config - verify install layout. Creating folders."
+    New-Item -ItemType Directory -Path "$RootPath\Logs\Archives" -Force | Out-Null
+    New-Item -ItemType Directory -Path "$RootPath\Config" -Force | Out-Null
+}
 $LogFile = "$RootPath\Logs\Network_Watchdog_Log.txt"
+$RootPathSeverity = if ($RootPathSource -eq "auto") { "OK" } else { "SUSPICIOUS" }
+Add-Content $LogFile "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [$RootPathSeverity] ROOTPATH_RESOLVED: $RootPath (source: $RootPathSource)" -Encoding UTF8
 $ArchiveFolder = "$RootPath\Logs\Archives"
 $HealthFile = "$RootPath\Config\Sentinel_Health.json"
 $MyIP = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -like "*Ethernet*" -or $_.InterfaceAlias -like "*Wi-Fi*" } | Select-Object -First 1).IPAddress

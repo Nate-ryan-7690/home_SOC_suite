@@ -8,8 +8,10 @@
 # USER CONFIGURATION
 # ============================================================
 
-# SOC install path — change if installed outside Desktop\SOC
-$DashboardPath = "$env:USERPROFILE\Desktop\SOC\Dashboard"
+# DashboardPath is auto-detected from the script location. The launcher
+# always starts the dashboard it lives next to, so it cannot mispoint.
+$DashboardPath = $PSScriptRoot
+$RootPath      = Split-Path -Parent $DashboardPath
 
 # Python executable. Two options:
 #   1. Full path (recommended — survives PATH issues when running elevated):
@@ -26,15 +28,9 @@ $Port          = 7001
 # ============================================================
 $URL           = "http://127.0.0.1:$Port"
 
-# Safety guard: abort if not pointing at the dev folder
-if ($DashboardPath -notmatch 'SOC') {
-    Write-Host "ERROR: DashboardPath does not point to SOC. Launcher aborted."
-    exit 1
-}
-
-$LogFile = "$env:USERPROFILE\Desktop\SOC\Logs\Dashboard_Launch.log"
+$LogFile = "$RootPath\Logs\Dashboard_Launch.log"
 function Log($msg) { "$(Get-Date -Format 'HH:mm:ss') $msg" | Add-Content $LogFile }
-Log "Launcher started"
+Log "Launcher started (root: $RootPath)"
 
 # ── Check if Flask already running on dev port ──────────────────
 $already = $false
